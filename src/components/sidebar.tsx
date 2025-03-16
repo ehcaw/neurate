@@ -15,11 +15,12 @@ import {
 } from "lucide-react";
 import type { Note } from "@/lib/note-utils";
 import { cn } from "@/lib/utils";
+import { KeyboardHelp } from "@/components/keyboard-help";
 
 interface SidebarProps {
   notes: Note[];
   activeNoteId: string | null;
-  setActiveNoteId: (id: string | null) => void;
+  setActiveNoteId: (id: string) => void;
   createNote: () => void;
   deleteNote: (id: string) => void;
   isOpen: boolean;
@@ -56,12 +57,15 @@ export function Sidebar({
           "h-full border-r border-border bg-background transition-all duration-300 ease-in-out",
           isOpen ? "w-64" : "w-0",
         )}
+        data-sidebar
+        tabIndex={0}
       >
         {isOpen && (
           <div className="flex flex-col h-full">
             <div className="flex items-center justify-between p-4 border-b">
               <h2 className="font-semibold truncate">Notes ({notes.length})</h2>
               <div className="flex items-center gap-1">
+                <KeyboardHelp />
                 <Button
                   variant="ghost"
                   size="icon"
@@ -118,7 +122,10 @@ export function Sidebar({
                     >
                       <button
                         className="flex items-center gap-2 truncate flex-1 text-left"
-                        onClick={() => setActiveNoteId(note.id)}
+                        onClick={() => {
+                          // Explicitly set the active note ID and ensure it updates
+                          setActiveNoteId(note.id);
+                        }}
                       >
                         <FileText className="h-4 w-4 shrink-0 opacity-70" />
                         <span className="truncate">
