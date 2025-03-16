@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Edit } from "lucide-react";
 import type { Note } from "@/lib/note-utils";
-import { markdownToHtml } from "@/lib/markdown";
+import { markdownToHtml, clearMarkdownCache } from "@/lib/markdown";
 
 interface PreviewProps {
   note: Note;
@@ -22,7 +22,10 @@ export function Preview({ note, setIsPreviewMode }: PreviewProps) {
   // Set HTML content and add click handlers for internal links
   useEffect(() => {
     if (contentRef.current) {
-      contentRef.current.innerHTML = htmlContent;
+      // Only update if content changed
+      if (contentRef.current.innerHTML !== htmlContent) {
+        contentRef.current.innerHTML = htmlContent;
+      }
 
       // Add click handlers for internal links
       const links = contentRef.current.querySelectorAll('a[href^="#"]');
@@ -47,6 +50,13 @@ export function Preview({ note, setIsPreviewMode }: PreviewProps) {
       }
     };
   }, [htmlContent]);
+
+  // Clear markdown cache when component unmounts
+  useEffect(() => {
+    return () => {
+      clearMarkdownCache();
+    };
+  }, []);
 
   return (
     <div className="flex flex-col h-full">

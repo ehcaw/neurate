@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import type React from "react";
+
+import { useMemo, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -50,6 +52,33 @@ export function Sidebar({
     );
   }, [notes, searchQuery]);
 
+  // Memoize handlers for better performance
+  const handleNoteClick = useCallback(
+    (id: string) => {
+      setActiveNoteId(id);
+    },
+    [setActiveNoteId],
+  );
+
+  const handleDeleteClick = useCallback(
+    (e: React.MouseEvent, id: string) => {
+      e.stopPropagation();
+      deleteNote(id);
+    },
+    [deleteNote],
+  );
+
+  const handleSearchChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setSearchQuery(e.target.value);
+    },
+    [],
+  );
+
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery("");
+  }, []);
+
   return (
     <>
       <div
@@ -91,7 +120,7 @@ export function Sidebar({
                 <Input
                   placeholder="Search notes..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={handleSearchChange}
                   className="pl-8 h-9"
                 />
                 {searchQuery && (
@@ -99,7 +128,7 @@ export function Sidebar({
                     variant="ghost"
                     size="icon"
                     className="absolute right-1 top-1 h-7 w-7"
-                    onClick={() => setSearchQuery("")}
+                    onClick={handleClearSearch}
                   >
                     <X className="h-3.5 w-3.5" />
                   </Button>
@@ -122,10 +151,7 @@ export function Sidebar({
                     >
                       <button
                         className="flex items-center gap-2 truncate flex-1 text-left"
-                        onClick={() => {
-                          // Explicitly set the active note ID and ensure it updates
-                          setActiveNoteId(note.id);
-                        }}
+                        onClick={() => handleNoteClick(note.id)}
                       >
                         <FileText className="h-4 w-4 shrink-0 opacity-70" />
                         <span className="truncate">
@@ -136,10 +162,7 @@ export function Sidebar({
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 opacity-0 group-hover:opacity-100"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteNote(note.id);
-                        }}
+                        onClick={(e) => handleDeleteClick(e, note.id)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

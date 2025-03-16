@@ -1,0 +1,32 @@
+const [htmlContent, setHtmlContent] = useState('');
+  
+  // Process markdown and update HTML content
+  useEffect(() => {
+    async function processMarkdown() {
+      const html = await markdownToHtml(note.content);
+      setHtmlContent(html);
+    }
+    
+    processMarkdown();
+  }, [note.content]);
+
+  // Set HTML content and add click handlers for internal links
+  useEffect(() => {
+    if (!htmlContent) return;
+    
+    if (contentRef.current) {
+      contentRef.current.innerHTML = htmlContent;
+      
+      // Add click handlers for internal links
+      const links = contentRef.current.querySelectorAll('a[href^="#"]');
+      links.forEach((link) => {
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          const href = link.getAttribute("href");
+          if (href) {
+            // Handle internal navigation here
+            console.log("Navigate to:", href);
+          }
+        });
+      });
+    }
