@@ -6,12 +6,11 @@ import { parseLinks } from "./note-utils";
 marked.setOptions({
   gfm: true,
   breaks: true,
-  smartLists: true,
-  smartypants: true,
-  highlight: (code, lang) => {
-    // You could add syntax highlighting here
-    return code;
-  },
+  //smartLists: true,
+  //smartypants: true,
+  //highlight: (code, lang) => {
+  // You could add syntax highlighting here
+  //return code;
 });
 
 // Custom renderer to handle internal links
