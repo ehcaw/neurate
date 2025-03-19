@@ -1,5 +1,7 @@
 "use client";
 
+import type React from "react";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,19 +15,6 @@ import {
   Code,
 } from "lucide-react";
 import type { Note } from "@/lib/note-utils";
-import { useDebounce } from "@/hooks/use-debounce";
-import { basicSetup } from "codemirror";
-import { EditorState } from "@codemirror/state";
-import {
-  EditorView,
-  keymap,
-  lineNumbers,
-  highlightActiveLine,
-} from "@codemirror/view";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { languages } from "@codemirror/language-data";
-import { indentWithTab } from "@codemirror/commands";
-import { oneDark } from "@codemirror/theme-one-dark";
 
 interface EnhancedEditorProps {
   note: Note;
@@ -33,188 +22,213 @@ interface EnhancedEditorProps {
   setIsPreviewMode: (isPreview: boolean) => void;
 }
 
+// A simpler, more performant editor implementation
 export function EnhancedEditor({
   note,
   updateNote,
   setIsPreviewMode,
 }: EnhancedEditorProps) {
-  const editorRef = useRef<HTMLDivElement>(null);
-  const editorViewRef = useRef<EditorView | null>(null);
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const noteIdRef = useRef(note.id);
-  const noteContentRef = useRef(note.content);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [content, setContent] = useState(note.content);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Set up debounced save to avoid excessive localStorage writes
-  const debouncedSave = useDebounce((id: string, content: string) => {
-    updateNote(id, { content });
-  }, 500);
-
-  // Check for dark mode
+  // Update local content when note changes
   useEffect(() => {
-    const isDark = document.documentElement.classList.contains("dark");
-    setIsDarkMode(isDark);
-
-    // Listen for theme changes
-    const observer = new MutationObserver((mutations) => {
-      mutations.forEach((mutation) => {
-        if (mutation.attributeName === "class") {
-          const isDark = document.documentElement.classList.contains("dark");
-          setIsDarkMode(isDark);
-        }
-      });
-    });
-
-    observer.observe(document.documentElement, { attributes: true });
-    return () => observer.disconnect();
-  }, []);
-
-  // Initialize CodeMirror
-  useEffect(() => {
-    if (!editorRef.current || editorViewRef.current) return;
-
-    const extensions = [
-      basicSetup,
-      lineNumbers(),
-      highlightActiveLine(),
-      keymap.of([indentWithTab]),
-      markdown({
-        base: markdownLanguage,
-        codeLanguages: languages,
-        addKeymap: true,
-      }),
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged) {
-          const content = update.state.doc.toString();
-          debouncedSave(note.id, content);
-        }
-      }),
-      EditorView.theme({
-        "&": {
-          height: "100%",
-          fontSize: "14px",
-          fontFamily: "monospace",
-        },
-        ".cm-content": {
-          fontFamily: "monospace",
-          padding: "10px 0",
-        },
-        ".cm-line": {
-          padding: "0 10px",
-        },
-      }),
-    ];
-
-    if (isDarkMode) {
-      extensions.push(oneDark);
-    }
-
-    const state = EditorState.create({
-      doc: note.content,
-      extensions,
-    });
-
-    const view = new EditorView({
-      state,
-      parent: editorRef.current,
-    });
-
-    editorViewRef.current = view;
-    noteIdRef.current = note.id;
-    noteContentRef.current = note.content;
-
-    return () => {
-      view.destroy();
-      editorViewRef.current = null;
-    };
-  }, [debouncedSave, isDarkMode, note.content, note.id]);
-
-  // Update editor content when note changes
-  useEffect(() => {
-    // Only update if the editor exists and either the note ID changed or content changed
-    if (
-      editorViewRef.current &&
-      (noteIdRef.current !== note.id || noteContentRef.current !== note.content)
-    ) {
-      const currentContent = editorViewRef.current.state.doc.toString();
-
-      // Only update if the content is actually different to avoid loops
-      if (currentContent !== note.content) {
-        editorViewRef.current.dispatch({
-          changes: {
-            from: 0,
-            to: currentContent.length,
-            insert: note.content,
-          },
-        });
-      }
-
-      // Update refs
-      noteIdRef.current = note.id;
-      noteContentRef.current = note.content;
-    }
+    setContent(note.content);
   }, [note.id, note.content]);
 
-  // Insert markdown formatting
-  const insertFormatting = useCallback((format: string) => {
-    if (!editorViewRef.current) return;
-
-    const selection = editorViewRef.current.state.selection.main;
-    const selectedText = editorViewRef.current.state.sliceDoc(
-      selection.from,
-      selection.to,
-    );
-
-    let insertText = "";
-    let newCursorPos = selection.from;
-
-    switch (format) {
-      case "bold":
-        insertText = `**${selectedText}**`;
-        newCursorPos = selection.from + 2;
-        break;
-      case "italic":
-        insertText = `*${selectedText}*`;
-        newCursorPos = selection.from + 1;
-        break;
-      case "list":
-        insertText = `\n- ${selectedText}`;
-        newCursorPos = selection.from + 3;
-        break;
-      case "ordered-list":
-        insertText = `\n1. ${selectedText}`;
-        newCursorPos = selection.from + 4;
-        break;
-      case "image":
-        insertText = `![${selectedText || "alt text"}](url)`;
-        newCursorPos = selection.from + 2;
-        break;
-      case "link":
-        insertText = `[${selectedText || "link text"}](url)`;
-        newCursorPos = selection.from + 1;
-        break;
-      case "code":
-        insertText = selectedText.includes("\n")
-          ? "```\n" + selectedText + "\n```"
-          : "`" + selectedText + "`";
-        newCursorPos = selection.from + (selectedText.includes("\n") ? 4 : 1);
-        break;
+  // Auto-resize textarea based on content
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = "auto";
+      textarea.style.height = `${textarea.scrollHeight}px`;
     }
+  }, [content]);
 
-    editorViewRef.current.dispatch({
-      changes: {
-        from: selection.from,
-        to: selection.to,
-        insert: insertText,
-      },
-      selection: {
-        anchor:
-          newCursorPos + (selectedText.length > 0 ? selectedText.length : 0),
-      },
-    });
+  // Handle content change with debounced save
+  const handleContentChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const newContent = e.target.value;
+      setContent(newContent);
 
-    // Focus the editor after inserting
-    editorViewRef.current.focus();
+      // Clear any existing timeout
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+
+      // Set a new timeout for saving
+      saveTimeoutRef.current = setTimeout(() => {
+        updateNote(note.id, { content: newContent });
+      }, 500);
+    },
+    [note.id, updateNote],
+  );
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
   }, []);
+
+  // Insert formatting at cursor position
+  const insertFormatting = useCallback(
+    (format: string) => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const selectedText = textarea.value.substring(start, end);
+
+      let insertText = "";
+      let cursorOffset = 0;
+
+      switch (format) {
+        case "bold":
+          insertText = `**${selectedText}**`;
+          cursorOffset = 2;
+          break;
+        case "italic":
+          insertText = `*${selectedText}*`;
+          cursorOffset = 1;
+          break;
+        case "list":
+          insertText = `\n- ${selectedText}`;
+          cursorOffset = 3;
+          break;
+        case "ordered-list":
+          insertText = `\n1. ${selectedText}`;
+          cursorOffset = 4;
+          break;
+        case "image":
+          insertText = `![${selectedText || "alt text"}](url)`;
+          cursorOffset = 2;
+          break;
+        case "link":
+          insertText = `[${selectedText || "link text"}](url)`;
+          cursorOffset = 1;
+          break;
+        case "code":
+          insertText = selectedText.includes("\n")
+            ? "```\n" + selectedText + "\n```"
+            : "`" + selectedText + "`";
+          cursorOffset = selectedText.includes("\n") ? 4 : 1;
+          break;
+      }
+
+      const newContent =
+        textarea.value.substring(0, start) +
+        insertText +
+        textarea.value.substring(end);
+
+      // Update state
+      setContent(newContent);
+
+      // Update textarea value
+      textarea.value = newContent;
+
+      // Save the change
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      saveTimeoutRef.current = setTimeout(() => {
+        updateNote(note.id, { content: newContent });
+      }, 500);
+
+      // Set cursor position
+      setTimeout(() => {
+        textarea.focus();
+        if (selectedText) {
+          textarea.setSelectionRange(
+            start + cursorOffset,
+            start + cursorOffset + selectedText.length,
+          );
+        } else {
+          const newPosition =
+            start +
+            cursorOffset +
+            (format === "image" || format === "link" ? 8 : 0);
+          textarea.setSelectionRange(newPosition, newPosition);
+        }
+      }, 0);
+    },
+    [note.id, updateNote],
+  );
+
+  // Handle keyboard shortcuts
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Check for keyboard shortcuts
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key.toLowerCase()) {
+          case "b":
+            e.preventDefault();
+            insertFormatting("bold");
+            break;
+          case "i":
+            e.preventDefault();
+            insertFormatting("italic");
+            break;
+          case "1":
+            if (e.altKey) {
+              e.preventDefault();
+              insertFormatting("ordered-list");
+            }
+            break;
+          case "-":
+            e.preventDefault();
+            insertFormatting("list");
+            break;
+          case "k":
+            if (e.shiftKey) {
+              e.preventDefault();
+              insertFormatting("link");
+            }
+            break;
+          case "`":
+            e.preventDefault();
+            insertFormatting("code");
+            break;
+        }
+      }
+
+      // Handle tab key for indentation
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const textarea = e.currentTarget;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+
+        // Insert tab character
+        const newContent =
+          textarea.value.substring(0, start) +
+          "  " +
+          textarea.value.substring(end);
+
+        // Update state and textarea
+        setContent(newContent);
+        textarea.value = newContent;
+
+        // Set cursor position after tab
+        setTimeout(() => {
+          textarea.selectionStart = textarea.selectionEnd = start + 2;
+        }, 0);
+
+        // Save the change
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+        }
+        saveTimeoutRef.current = setTimeout(() => {
+          updateNote(note.id, { content: newContent });
+        }, 500);
+      }
+    },
+    [insertFormatting, note.id, updateNote],
+  );
 
   return (
     <div className="flex flex-col h-full" data-editor>
@@ -263,7 +277,7 @@ export function EnhancedEditor({
           size="icon"
           className="h-8 w-8"
           onClick={() => insertFormatting("list")}
-          title="Bullet List"
+          title="Bullet List (Ctrl+-)"
         >
           <List className="h-4 w-4" />
         </Button>
@@ -272,7 +286,7 @@ export function EnhancedEditor({
           size="icon"
           className="h-8 w-8"
           onClick={() => insertFormatting("ordered-list")}
-          title="Numbered List"
+          title="Numbered List (Alt+Ctrl+1)"
         >
           <ListOrdered className="h-4 w-4" />
         </Button>
@@ -290,7 +304,7 @@ export function EnhancedEditor({
           size="icon"
           className="h-8 w-8"
           onClick={() => insertFormatting("link")}
-          title="Link"
+          title="Link (Ctrl+Shift+K)"
         >
           <Link className="h-4 w-4" />
         </Button>
@@ -299,14 +313,27 @@ export function EnhancedEditor({
           size="icon"
           className="h-8 w-8"
           onClick={() => insertFormatting("code")}
-          title="Code"
+          title="Code (Ctrl+`)"
         >
           <Code className="h-4 w-4" />
         </Button>
       </div>
 
-      <div className="flex-1 overflow-auto">
-        <div ref={editorRef} className="h-full w-full" />
+      <div className="flex-1 overflow-auto p-4">
+        <textarea
+          ref={textareaRef}
+          value={content}
+          onChange={handleContentChange}
+          onKeyDown={handleKeyDown}
+          placeholder="Start writing..."
+          className="w-full h-full min-h-[calc(100vh-10rem)] resize-none bg-transparent border-none outline-none font-mono text-sm leading-relaxed"
+          spellCheck="false"
+          style={{
+            caretColor: "var(--primary)",
+            lineHeight: "1.6",
+            tabSize: 2,
+          }}
+        />
       </div>
     </div>
   );

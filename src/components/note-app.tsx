@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { act, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { debounce } from "@/lib/utils";
 import { Sidebar } from "@/components/sidebar";
@@ -9,7 +9,10 @@ import { CommandMenu } from "@/components/command-menu";
 import { useHotkeys } from "@/hooks/use-hotkeys";
 import { type Note, createEmptyNote } from "@/lib/note-utils";
 // Add import for the enhanced editor
-import { EnhancedEditor } from "@/components/enhanced-editor";
+import { Tiptap } from "./editor/tiptap";
+import { invoke } from "@tauri-apps/api/core";
+import React, { Suspense } from "react";
+import { uuid } from "short-uuid";
 
 export default function NoteApp() {
   const [notes, setNotes] = useState<Note[]>([]);
@@ -18,8 +21,10 @@ export default function NoteApp() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
   const initialLoadDone = useRef(false);
+  const editorRef = useRef<HTMLDivElement>(null);
 
   const router = useRouter();
+
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -99,12 +104,19 @@ export default function NoteApp() {
 
   const createNote = useCallback(() => {
     const newNote = createEmptyNote("Untitled Note");
+    let id = `./elab/UntitledNote-${uuid()}`;
+    newNote.id = id;
     setNotes((prev) => [newNote, ...prev]);
     setActiveNoteId(newNote.id);
-    return newNote;
+    console.log(id);
+    invoke("write_file", {
+      path: id,
+      content: "",
+    });
   }, []);
 
   const updateNote = useCallback((id: string, updates: Partial<Note>) => {
+    const { title, content, createdAt, updatedAt, tags } = updates;
     setNotes((prev) =>
       prev.map((note) =>
         note.id === id
@@ -112,6 +124,10 @@ export default function NoteApp() {
           : note,
       ),
     );
+    // Update backend
+    if (title) {
+      invoke("move_path", { source: id, destination: title });
+    }
   }, []);
 
   const deleteNote = useCallback(
@@ -158,6 +174,9 @@ export default function NoteApp() {
       callback: (e) => {
         e.preventDefault();
         setIsPreviewMode((prev) => !prev);
+        if (editorRef.current) {
+          editorRef.current.editor.commands.focus("end");
+        }
       },
     },
     {
@@ -203,7 +222,17 @@ export default function NoteApp() {
         if (activeNoteId) {
           const note = notes.find((note) => note.id === activeNoteId);
           if (note) {
-            updateNote(activeNoteId, { updatedAt: new Date().toISOString() });
+            // Access editor instance if available
+            if (editorRef.current?.editor) {
+              const content = editorRef.current.editor.getHTML();
+              console.log(content);
+              updateNote(activeNoteId, {
+                content,
+                updatedAt: new Date().toISOString(),
+              });
+            } else {
+              updateNote(activeNoteId, { updatedAt: new Date().toISOString() });
+            }
             // Show a toast or notification that the note was saved
             console.log("Note saved");
           }
@@ -261,11 +290,18 @@ export default function NoteApp() {
             {isPreviewMode ? (
               <Preview note={activeNote} setIsPreviewMode={setIsPreviewMode} />
             ) : (
-              <EnhancedEditor
-                note={activeNote}
-                updateNote={updateNote}
-                setIsPreviewMode={setIsPreviewMode}
-              />
+              <div>
+                {/* Only render Tiptap on client-side */}
+                {typeof window !== "undefined" && (
+                  <Tiptap
+                    key={activeNote.id} /* Force re-render when note changes */
+                    ref={editorRef}
+                    note={activeNote}
+                    updateNote={updateNote}
+                    setIsPreviewMode={setIsPreviewMode}
+                  />
+                )}
+              </div>
             )}
           </>
         ) : (
