@@ -1,4 +1,5 @@
 "use client";
+import "@/components/styles.module.scss";
 
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -17,9 +18,13 @@ import {
   Image as ImageIcon,
   Link as LinkIcon,
   Code,
+  FocusIcon,
+  Pencil,
 } from "lucide-react";
 import type { Note } from "@/lib/note-utils";
-import SlashCommands from "./command-list";
+import SlashCommands from "../custom-nodes/command-list";
+import NodeWrapper from "../custom-nodes/node-wrapper";
+import SketchPadImpl from "../custom-nodes/sketch";
 
 interface TiptapProps {
   note: Note;
@@ -37,6 +42,12 @@ export const Tiptap = forwardRef<any, TiptapProps>(
         Placeholder.configure({ placeholder: "Start writing..." }),
         CodeBlock,
         SlashCommands,
+        NodeWrapper({
+          component: SketchPadImpl,
+          name: "sketchpad",
+          group: "block",
+          props: {},
+        }),
       ],
       content: note.content,
       onUpdate: ({ editor }) => {
@@ -108,6 +119,19 @@ export const Tiptap = forwardRef<any, TiptapProps>(
 
       input.click();
     }, [editor]);
+
+    const insertSketchPad = () => {
+      if (editor) {
+        editor.commands.insertContent({
+          type: "sketchpad",
+          attrs: {
+            width: 300,
+            height: 200,
+            lines: [],
+          },
+        });
+      }
+    };
 
     if (!editor) return null;
 
@@ -201,6 +225,27 @@ export const Tiptap = forwardRef<any, TiptapProps>(
           >
             <Code className="h-4 w-4" />
           </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() =>
+              editor
+                .chain()
+                .focus()
+                .insertContent({
+                  type: "sketchpad",
+                  attrs: {
+                    width: 1000,
+                    height: 700,
+                  },
+                })
+                .run()
+            }
+            title="Add Sketch"
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
 
           {/* AI Feature Button Example */}
           <Button
@@ -223,5 +268,4 @@ export const Tiptap = forwardRef<any, TiptapProps>(
     );
   },
 );
-
 Tiptap.displayName = "Tiptap";

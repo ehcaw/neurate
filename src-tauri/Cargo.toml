@@ -21,6 +21,8 @@ tauri-build = { version = "2", features = [] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = ["devtools"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4"] }
 tauri-plugin-opener = "2"
 
 [features]

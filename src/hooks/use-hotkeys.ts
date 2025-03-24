@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 
 interface Hotkey {
   keys: string;
@@ -62,4 +62,43 @@ export function useHotkeys(hotkeys: Hotkey[]) {
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []); // Empty dependency array since we use ref
+}
+
+type KeyHandler = (e: KeyboardEvent) => void;
+
+export function useHotkeysWithCallback(key: string, callback: KeyHandler) {
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      // Parse the key combination
+      const keys = key.toLowerCase().split("+");
+      const mainKey = keys[keys.length - 1];
+
+      // Check if modifiers are required and pressed
+      const needCtrl = keys.includes("ctrl");
+      const needShift = keys.includes("shift");
+      const needAlt = keys.includes("alt");
+      const needMeta = keys.includes("meta");
+
+      const pressedKey = event.key.toLowerCase();
+
+      if (
+        pressedKey === mainKey &&
+        (!needCtrl || event.ctrlKey) &&
+        (!needShift || event.shiftKey) &&
+        (!needAlt || event.altKey) &&
+        (!needMeta || event.metaKey)
+      ) {
+        event.preventDefault();
+        callback(event);
+      }
+    },
+    [key, callback],
+  );
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [handleKeyDown]);
 }

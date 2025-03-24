@@ -14,6 +14,7 @@ import {
   Code,
   ImageIcon,
   Sparkles,
+  Pencil,
 } from "lucide-react";
 
 // Command menu component
@@ -230,6 +231,25 @@ const SlashCommands = Extension.create({
                   .focus()
                   .deleteRange(range)
                   .insertContent("AI generated text would go here")
+                  .run();
+              },
+            },
+            {
+              title: "Sketchpad",
+              description: "Draw on the page",
+              icon: <Pencil className="h-4 w-4" />,
+              command: ({ editor, range }: { editor: any; range: any }) => {
+                editor
+                  .chain()
+                  .focus()
+                  .deleteRange(range)
+                  .insertContent({
+                    type: "sketchpad",
+                    attrs: {
+                      width: 1000,
+                      height: 700,
+                    },
+                  })
                   .run();
               },
             },

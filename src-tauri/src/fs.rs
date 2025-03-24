@@ -1,17 +1,47 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use tauri::{command, AppHandle, Runtime, Window};
 
-// Define a structure for file metadata that can be serialized/deserialized
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileMetadata {
-  name: String,
-  path: String,
-  is_dir: bool,
-  size: u64,
-  // You could add more fields like creation_time, modified_time, etc.
+// Define the structures
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteType {
+  FreeNote,
+  Notebook,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Metadata {
+  pub created_at: DateTime<Utc>,
+  pub last_accessed: DateTime<Utc>,
+  pub note_type: NoteType,
+  pub tags: Vec<String>,
+  // Add more metadata fields as needed
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PageContent {
+  pub id: String,
+  pub content: String,
+  pub drawings: Vec<DrawingData>,
+  pub created_at: DateTime<Utc>,
+  pub last_modified: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DrawingData {
+  pub tool: String,
+  pub points: Vec<f64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Note {
+  pub title: String,
+  pub metadata: Metadata,
+  pub pages: Vec<PageContent>,
 }
 
 // Read a file's contents
@@ -132,4 +162,53 @@ pub fn calculate_directory_size(path: &str) -> Result<u64, String> {
   }
 
   Ok(total_size)
+}
+
+#[tauri::command]
+pub fn save_note(path: &str, note: Note) -> Result<(), String> {
+  let json =
+    serde_json::to_string_pretty(&note).map_err(|e| format!("Failed to parse note: {}", e))?;
+
+  write_file(path, &json)
+}
+
+pub fn add_page(note: &mut Note, content: String, drawings: Vec<DrawingData>) {
+  let now = Utc::now();
+  let page = PageContent {
+    id: uuid::Uuid::new_v4().to_string(), // You'll need to add uuid = "1.0" to dependencies
+    content,
+    drawings,
+    created_at: now,
+    last_modified: now,
+  };
+  note.pages.push(page);
+}
+
+pub fn create_new_note(title: String, note_type: NoteType) -> Note {
+  let now = Utc::now();
+  Note {
+    title,
+    metadata: Metadata {
+      created_at: now,
+      last_accessed: now,
+      note_type,
+      tags: Vec::new(),
+    },
+    pages: Vec::new(),
+  }
+}
+
+#[tauri::command]
+pub fn create_and_save_note(path: &str, title: String) -> Result<(), String> {
+  let mut note = create_new_note(title, NoteType::FreeNote);
+
+  // Add a page with some content and drawings
+  let drawings = vec![DrawingData {
+    tool: "brush".to_string(),
+    points: vec![100.0, 100.0, 200.0, 200.0],
+  }];
+
+  add_page(&mut note, "Initial content".to_string(), drawings);
+
+  save_note(path, note)
 }

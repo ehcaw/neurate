@@ -3,16 +3,42 @@
 import { act, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { debounce } from "@/lib/utils";
-import { Sidebar } from "@/components/sidebar";
+import { Sidebar } from "./sidebar/sidebar";
 import { Preview } from "@/components/preview";
 import { CommandMenu } from "@/components/command-menu";
 import { useHotkeys } from "@/hooks/use-hotkeys";
-import { type Note, createEmptyNote } from "@/lib/note-utils";
+import { createEmptyNote } from "@/lib/note-utils";
+interface DrawingData {
+  tool: string;
+  points: number[];
+}
+
+interface PageContent {
+  id: string;
+  content: string;
+  drawings: DrawingData[];
+  created_at: string;
+  last_modified: string;
+}
+
+interface Metadata {
+  created_at: string;
+  last_accessed: string;
+  note_type: 'free_note' | 'notebook';
+  tags: string[];
+}
+
+interface Note {
+  title: string;
+  metadata: Metadata;
+  pages: PageContent[];
+}
 // Add import for the enhanced editor
 import { Tiptap } from "./editor/tiptap";
 import { invoke } from "@tauri-apps/api/core";
 import React, { Suspense } from "react";
 import { uuid } from "short-uuid";
+import { NodePos } from "@tiptap/react";
 
 export default function NoteApp() {
   const [notes, setNotes] = useState<Note[]>([]);
@@ -38,11 +64,24 @@ export default function NoteApp() {
         setNotes(JSON.parse(savedNotes));
       } else {
         // Create a welcome note if no notes exist
-        const welcomeNote = createEmptyNote("Welcome to FastNotes");
-        welcomeNote.content =
-          "# Welcome to FastNotes\n\nA blazing fast note-taking app inspired by Obsidian.\n\n## Features\n\n- ⚡ Lightning fast performance\n- 📝 Markdown support\n- 🔍 Quick search\n- ⌨️ Keyboard shortcuts\n\nPress `Ctrl+P` to open the command menu.";
-        setNotes([welcomeNote]);
-        setActiveNoteId(welcomeNote.id);
+        const welcomeNote: Note = {
+                  title: "Welcome to FastNotes",
+                  metadata: {
+                    created_at: new Date().toISOString(),
+                    last_accessed: new Date().toISOString(),
+                    note_type: "free_note",
+                    tags: ["welcome"]
+                  },
+                  pages: [{
+                    id: uuid(),
+                    content: "# Welcome to FastNotes\n\nA blazing fast note-taking app inspired by Obsidian.\n\n## Features\n\n- ⚡ Lightning fast performance\n- 📝 Markdown support\n- 🔍 Quick search\n- ⌨️ Keyboard shortcuts\n\nPress `Ctrl+P` to open the command menu.",
+                    drawings: [],
+                    created_at: new Date().toISOString(),
+                    last_modified: new Date().toISOString()
+                  }]
+                };
+                setNotes([welcomeNote]);
+                setActiveNoteId(welcomeNote.title);
       }
       initialLoadDone.current = true;
     } catch (error) {
@@ -53,7 +92,6 @@ export default function NoteApp() {
   // Use debounced save for better performance
   const saveNotesToStorage = useCallback(
     debounce((notesToSave: Note[]) => {
-      console.log("Saving notes to storage");
       localStorage.setItem("notes", JSON.stringify(notesToSave));
     }, 500),
     [],
@@ -77,7 +115,7 @@ export default function NoteApp() {
       setActiveNoteId(noteId);
     } else if (notes.length > 0) {
       // No note ID in URL or invalid ID, default to first note
-      setActiveNoteId(notes[0].id);
+      setActiveNoteId(notes[0].path);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialLoadDone.current, notes.length, searchParams]);
@@ -102,56 +140,113 @@ export default function NoteApp() {
     return notes.find((note) => note.id === activeNoteId) || null;
   }, [notes, activeNoteId]);
 
-  const createNote = useCallback(() => {
-    const newNote = createEmptyNote("Untitled Note");
-    let id = `./elab/UntitledNote-${uuid()}`;
-    newNote.id = id;
-    setNotes((prev) => [newNote, ...prev]);
-    setActiveNoteId(newNote.id);
-    console.log(id);
-    invoke("write_file", {
-      path: id,
-      content: "",
-    });
-  }, []);
+  const createNote = useCallback(async () => {
+      const title = `New Note ${notes.length + 1}`;
+      const note: Note = {
+        title,
+        metadata: {
+          created_at: new Date().toISOString(),
+          last_accessed: new Date().toISOString(),
+          note_type: "free_note",
+          tags: []
+        },
+        pages: [{
+          id: uuid(),
+          content: "",
+          drawings: [],
+          created_at: new Date().toISOString(),
+          last_modified: new Date().toISOString()
+        }]
+      };
+  
+      // Save to filesystem
+      await invoke("save_note", {
+        path: `${title}.json`,
+        note
+      });
+  
+      // Update state
+      setNotes(prev => [...prev, note]);
+      setActiveNoteId(title);
+    }, [notes]);
 
-  const updateNote = useCallback((id: string, updates: Partial<Note>) => {
-    const { title, content, createdAt, updatedAt, tags } = updates;
-    setNotes((prev) =>
-      prev.map((note) =>
-        note.id === id
-          ? { ...note, ...updates, updatedAt: new Date().toISOString() }
-          : note,
-      ),
-    );
-    // Update backend
-    if (title) {
-      invoke("move_path", { source: id, destination: title });
+    const updateNote = useCallback((title: string, updates: Partial<Note>) => {
+        setNotes((prev) =>
+          prev.map((note) =>
+            note.title === title
+              ? {
+                  ...note,
+                  ...updates,
+                  metadata: {
+                    ...note.metadata,
+                    last_accessed: new Date().toISOString()
+                  }
+                }
+              : note
+          )
+        );
+        
+        // Update backend
+        if (updates.title && updates.title !== title) {
+          invoke("move_path", { 
+            source: `${title}.json`, 
+            destination: `${updates.title}.json` 
+          });
+        }
+        
+        // Save note content
+        invoke("save_note", {
+          path: `${title}.json`,
+          note: prev.find(n => n.title === title)
+        });
+      }, []);
+
+  const getEditorContent = () => {
+    let formattedEditorContent = "";
+    if (editorRef.current) {
+      editorRef.current.editor.state.doc.forEach((node, offset, index) => {
+        console.log(node, offset, index);
+      });
+    }
+  };
+
+  const saveContent = useCallback((id: string, updates: Partial<Note>) => {
+    if (editorRef) {
+      invoke("write_file", {
+        path: id,
+        content: editorRef.current.editor.getJSON(),
+      });
     }
   }, []);
 
   const deleteNote = useCallback(
-    (id: string) => {
-      if (notes.length <= 1) return; // Prevent deleting the last note
-
-      // Find next note to select before filtering
-      let nextNoteId = activeNoteId;
-      if (activeNoteId === id) {
-        const currentIndex = notes.findIndex((note) => note.id === id);
-        const nextIndex = currentIndex === 0 ? 1 : 0;
-        nextNoteId = notes[nextIndex].id;
-      }
-
-      // Update notes list first
-      setNotes((prev) => prev.filter((note) => note.id !== id));
-
-      // Then update active note if needed
-      if (activeNoteId === id) {
-        setActiveNoteId(nextNoteId);
-      }
-    },
-    [notes, activeNoteId],
-  );
+      async (title: string) => {
+        if (notes.length <= 1) return; // Prevent deleting the last note
+  
+        // Find next note to select before filtering
+        let nextNoteTitle = activeNoteId;
+        if (activeNoteId === title) {
+          const currentIndex = notes.findIndex((note) => note.title === title);
+          const nextIndex = currentIndex === 0 ? 1 : 0;
+          nextNoteTitle = notes[nextIndex].title;
+        }
+  
+        // Delete from filesystem
+        await invoke("delete_path", { 
+          path: `${title}.json`,
+          recursive: false
+        });
+  
+        // Update notes list
+        setNotes((prev) => prev.filter((note) => note.title !== title));
+  
+        // Update active note if needed
+        if (activeNoteId === title) {
+          setActiveNoteId(nextNoteTitle);
+        }
+      },
+      [notes, activeNoteId],
+    );
 
   // Register global hotkeys
   useHotkeys([
@@ -224,12 +319,21 @@ export default function NoteApp() {
           if (note) {
             // Access editor instance if available
             if (editorRef.current?.editor) {
-              const content = editorRef.current.editor.getHTML();
-              console.log(content);
+              const jsonContent = editorRef.current.editor.getJSON();
+
+              // editorRef.current.editor.state.doc.forEach(
+              //   (node, offset, index) => {
+              //     console.log(node, offset, index);
+              //   },
+              // );
               updateNote(activeNoteId, {
                 content,
                 updatedAt: new Date().toISOString(),
               });
+              // invoke("write_file", {
+              //   path: activeNoteId,
+              //   content: editorRef.current.editor.getHTML(),
+              // });
             } else {
               updateNote(activeNoteId, { updatedAt: new Date().toISOString() });
             }
@@ -284,7 +388,7 @@ export default function NoteApp() {
         setIsOpen={setIsSidebarOpen}
       />
 
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
+      <div className="flex-1 flex flex-col h-full overflow-auto">
         {activeNote ? (
           <>
             {isPreviewMode ? (
