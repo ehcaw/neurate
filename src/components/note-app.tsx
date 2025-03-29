@@ -2,43 +2,17 @@
 
 import { act, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { debounce } from "@/lib/utils";
 import { Sidebar } from "./sidebar/sidebar";
-import { Preview } from "@/components/preview";
 import { CommandMenu } from "@/components/command-menu";
 import { useHotkeys } from "@/hooks/use-hotkeys";
-import { createEmptyNote } from "@/lib/note-utils";
-interface DrawingData {
-  tool: string;
-  points: number[];
-}
+import { Note, Metadata, PageContent, DrawingData } from "@/lib/types";
 
-interface PageContent {
-  id: string;
-  content: string;
-  drawings: DrawingData[];
-  created_at: string;
-  last_modified: string;
-}
-
-interface Metadata {
-  created_at: string;
-  last_accessed: string;
-  note_type: 'free_note' | 'notebook';
-  tags: string[];
-}
-
-interface Note {
-  title: string;
-  metadata: Metadata;
-  pages: PageContent[];
-}
 // Add import for the enhanced editor
-import { Tiptap } from "./editor/tiptap";
+import { Tiptap } from "./editor/notebook";
 import { invoke } from "@tauri-apps/api/core";
 import React, { Suspense } from "react";
-import { uuid } from "short-uuid";
-import { NodePos } from "@tiptap/react";
+import shortUUID, { uuid } from "short-uuid";
+import { Editor, NodePos } from "@tiptap/react";
 
 export default function NoteApp() {
   const [notes, setNotes] = useState<Note[]>([]);
@@ -47,62 +21,23 @@ export default function NoteApp() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
   const initialLoadDone = useRef(false);
-  const editorRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<{ editor: Editor }>(null);
 
   const router = useRouter();
 
   const pathname = usePathname();
   const searchParams = useSearchParams();
-
-  // Load notes from localStorage on initial render
+  //Load notes from memory
   useEffect(() => {
-    if (initialLoadDone.current) return;
-
-    try {
-      const savedNotes = localStorage.getItem("notes");
-      if (savedNotes) {
-        setNotes(JSON.parse(savedNotes));
-      } else {
-        // Create a welcome note if no notes exist
-        const welcomeNote: Note = {
-                  title: "Welcome to FastNotes",
-                  metadata: {
-                    created_at: new Date().toISOString(),
-                    last_accessed: new Date().toISOString(),
-                    note_type: "free_note",
-                    tags: ["welcome"]
-                  },
-                  pages: [{
-                    id: uuid(),
-                    content: "# Welcome to FastNotes\n\nA blazing fast note-taking app inspired by Obsidian.\n\n## Features\n\n- ⚡ Lightning fast performance\n- 📝 Markdown support\n- 🔍 Quick search\n- ⌨️ Keyboard shortcuts\n\nPress `Ctrl+P` to open the command menu.",
-                    drawings: [],
-                    created_at: new Date().toISOString(),
-                    last_modified: new Date().toISOString()
-                  }]
-                };
-                setNotes([welcomeNote]);
-                setActiveNoteId(welcomeNote.title);
-      }
-      initialLoadDone.current = true;
-    } catch (error) {
-      console.error("Failed to load notes:", error);
-    }
+    const loadNotes = async () => {
+      const notes: string[] = await invoke("gather_notes");
+      const formattedNotes: Note[] = notes.map((note: string) =>
+        JSON.parse(note),
+      );
+      setNotes(formattedNotes);
+    };
+    loadNotes();
   }, []);
-
-  // Use debounced save for better performance
-  const saveNotesToStorage = useCallback(
-    debounce((notesToSave: Note[]) => {
-      localStorage.setItem("notes", JSON.stringify(notesToSave));
-    }, 500),
-    [],
-  );
-
-  // Save notes to localStorage whenever they change
-  useEffect(() => {
-    if (notes.length > 0) {
-      saveNotesToStorage(notes);
-    }
-  }, [notes, saveNotesToStorage]);
 
   // Set active note from URL once on initial load
   useEffect(() => {
@@ -115,7 +50,7 @@ export default function NoteApp() {
       setActiveNoteId(noteId);
     } else if (notes.length > 0) {
       // No note ID in URL or invalid ID, default to first note
-      setActiveNoteId(notes[0].path);
+      setActiveNoteId(notes[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialLoadDone.current, notes.length, searchParams]);
@@ -141,112 +76,100 @@ export default function NoteApp() {
   }, [notes, activeNoteId]);
 
   const createNote = useCallback(async () => {
-      const title = `New Note ${notes.length + 1}`;
-      const note: Note = {
-        title,
-        metadata: {
-          created_at: new Date().toISOString(),
-          last_accessed: new Date().toISOString(),
-          note_type: "free_note",
-          tags: []
-        },
-        pages: [{
+    const title = `New Note ${notes.length + 1}`;
+    const note: Note = {
+      id: `untitled-${uuid()}.json`,
+      title,
+      metadata: {
+        created_at: new Date().toISOString(),
+        last_accessed: new Date().toISOString(),
+        note_type: "notebook",
+        tags: [],
+      },
+      pages: [
+        {
           id: uuid(),
           content: "",
-          drawings: [],
           created_at: new Date().toISOString(),
-          last_modified: new Date().toISOString()
-        }]
+          last_modified: new Date().toISOString(),
+        },
+      ],
+    };
+
+    // Save to filesystem
+    await invoke("create_new_note", {
+      title: "Untitled",
+      noteType: "notebook",
+    });
+
+    // Update state
+    setNotes((prev) => [...prev, note]);
+    setActiveNoteId(title);
+  }, [notes]);
+
+  const updateNote = (id: string, updates: Partial<Note>) => {
+    setNotes((prev) => {
+      const note = prev.find((n) => n.id === id);
+      if (!note) return prev;
+
+      const updatedNote: Note = {
+        ...note,
+        ...updates,
+        metadata: {
+          ...note.metadata,
+          last_accessed: new Date().toISOString(),
+        },
       };
-  
-      // Save to filesystem
-      await invoke("save_note", {
-        path: `${title}.json`,
-        note
-      });
-  
-      // Update state
-      setNotes(prev => [...prev, note]);
-      setActiveNoteId(title);
-    }, [notes]);
-
-    const updateNote = useCallback((title: string, updates: Partial<Note>) => {
-        setNotes((prev) =>
-          prev.map((note) =>
-            note.title === title
-              ? {
-                  ...note,
-                  ...updates,
-                  metadata: {
-                    ...note.metadata,
-                    last_accessed: new Date().toISOString()
-                  }
-                }
-              : note
-          )
-        );
-        
-        // Update backend
-        if (updates.title && updates.title !== title) {
-          invoke("move_path", { 
-            source: `${title}.json`, 
-            destination: `${updates.title}.json` 
-          });
-        }
-        
-        // Save note content
-        invoke("save_note", {
-          path: `${title}.json`,
-          note: prev.find(n => n.title === title)
-        });
-      }, []);
-
-  const getEditorContent = () => {
-    let formattedEditorContent = "";
-    if (editorRef.current) {
-      editorRef.current.editor.state.doc.forEach((node, offset, index) => {
-        console.log(node, offset, index);
-      });
-    }
+      return prev.map((n) => (n.id === id ? updatedNote : n));
+    });
   };
 
-  const saveContent = useCallback((id: string, updates: Partial<Note>) => {
-    if (editorRef) {
-      invoke("write_file", {
-        path: id,
-        content: editorRef.current.editor.getJSON(),
-      });
-    }
-  }, []);
+  // const getEditorContent = () => {
+  //   let formattedEditorContent = "";
+  //   if (editorRef.current) {
+  //     editorRef.current.editor.state.doc.forEach((node, offset, index) => {
+  //       console.log(node, offset, index);
+  //     });
+  //   }
+  // };
+
+  // const saveContent = useCallback((id: string, updates: Partial<Note>) => {
+  //   if (editorRef) {
+  //     invoke("write_file", {
+  //       path: id,
+  //       content: editorRef.current.editor.getJSON(),
+  //     });
+  //   }
+  // }, []);
 
   const deleteNote = useCallback(
-      async (title: string) => {
-        if (notes.length <= 1) return; // Prevent deleting the last note
-  
-        // Find next note to select before filtering
-        let nextNoteTitle = activeNoteId;
-        if (activeNoteId === title) {
-          const currentIndex = notes.findIndex((note) => note.title === title);
-          const nextIndex = currentIndex === 0 ? 1 : 0;
-          nextNoteTitle = notes[nextIndex].title;
-        }
-  
-        // Delete from filesystem
-        await invoke("delete_path", { 
-          path: `${title}.json`,
-          recursive: false
-        });
-  
-        // Update notes list
-        setNotes((prev) => prev.filter((note) => note.title !== title));
-  
-        // Update active note if needed
-        if (activeNoteId === title) {
-          setActiveNoteId(nextNoteTitle);
-        }
-      },
-      [notes, activeNoteId],
-    );
+    async (title: string) => {
+      if (notes.length <= 1) return; // Prevent deleting the last note
+
+      // Find next note to select before filtering
+      let nextNoteTitle = activeNoteId;
+      if (activeNoteId === title) {
+        const currentIndex = notes.findIndex((note) => note.title === title);
+        const nextIndex = currentIndex === 0 ? 1 : 0;
+        nextNoteTitle = notes[nextIndex].title;
+      }
+
+      // Delete from filesystem
+      await invoke("delete_path", {
+        path: `${title}.json`,
+        recursive: false,
+      });
+
+      // Update notes list
+      setNotes((prev) => prev.filter((note) => note.title !== title));
+
+      // Update active note if needed
+      if (activeNoteId === title) {
+        setActiveNoteId(nextNoteTitle);
+      }
+    },
+    [notes, activeNoteId],
+  );
 
   // Register global hotkeys
   useHotkeys([
@@ -314,32 +237,53 @@ export default function NoteApp() {
       callback: (e) => {
         e.preventDefault();
         // Force save current note
-        if (activeNoteId) {
+        if (activeNoteId && editorRef.current?.editor) {
           const note = notes.find((note) => note.id === activeNoteId);
-          if (note) {
-            // Access editor instance if available
-            if (editorRef.current?.editor) {
-              const jsonContent = editorRef.current.editor.getJSON();
+          if (!note) return;
 
-              // editorRef.current.editor.state.doc.forEach(
-              //   (node, offset, index) => {
-              //     console.log(node, offset, index);
-              //   },
-              // );
-              updateNote(activeNoteId, {
-                content,
-                updatedAt: new Date().toISOString(),
-              });
-              // invoke("write_file", {
-              //   path: activeNoteId,
-              //   content: editorRef.current.editor.getHTML(),
-              // });
-            } else {
-              updateNote(activeNoteId, { updatedAt: new Date().toISOString() });
-            }
-            // Show a toast or notification that the note was saved
-            console.log("Note saved");
-          }
+          // Get HTML content from the editor
+          const htmlContent = editorRef.current.editor.getHTML();
+
+          console.log(htmlContent);
+
+          // Create an updated version of the note
+          const updatedNote = {
+            ...note,
+            pages: note.pages.map((page, index) =>
+              index === 0
+                ? {
+                    // Assuming we're editing the first page
+                    ...page,
+                    content: htmlContent,
+                    last_modified: new Date().toISOString(),
+                  }
+                : page,
+            ),
+            metadata: {
+              ...note.metadata,
+              last_accessed: new Date().toISOString(),
+            },
+          };
+
+          // Stringify the entire updated note
+          const noteJson = JSON.stringify(updatedNote, null, 2);
+
+          // Save to file system
+          invoke("write_file", {
+            path: note.id, // Use the full path stored in note.id
+            content: noteJson,
+          })
+            .then(() => {
+              console.log("Note saved successfully");
+
+              // Update state
+              setNotes((prev) =>
+                prev.map((n) => (n.id === note.id ? updatedNote : n)),
+              );
+            })
+            .catch((err) => {
+              console.error("Failed to save note:", err);
+            });
         }
       },
     },
@@ -390,24 +334,18 @@ export default function NoteApp() {
 
       <div className="flex-1 flex flex-col h-full overflow-auto">
         {activeNote ? (
-          <>
-            {isPreviewMode ? (
-              <Preview note={activeNote} setIsPreviewMode={setIsPreviewMode} />
-            ) : (
-              <div>
-                {/* Only render Tiptap on client-side */}
-                {typeof window !== "undefined" && (
-                  <Tiptap
-                    key={activeNote.id} /* Force re-render when note changes */
-                    ref={editorRef}
-                    note={activeNote}
-                    updateNote={updateNote}
-                    setIsPreviewMode={setIsPreviewMode}
-                  />
-                )}
-              </div>
+          <div>
+            {/* Only render Tiptap on client-side */}
+            {typeof window !== "undefined" && (
+              <Tiptap
+                key={activeNote.id} /* Force re-render when note changes */
+                ref={editorRef}
+                note={activeNote}
+                updateNote={updateNote}
+                setIsPreviewMode={setIsPreviewMode}
+              />
             )}
-          </>
+          </div>
         ) : (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">

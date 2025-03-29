@@ -2,6 +2,12 @@ import { Node, NodeViewProps, RawCommands } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { ComponentType } from "react";
 
+function decodeHTMLEntities(text: string) {
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = text;
+  return textarea.value;
+}
+
 export default function NodeWrapper({
   component,
   name,
@@ -28,6 +34,21 @@ export default function NodeWrapper({
         },
         lines: {
           default: [],
+          parseHTML: (element) => {
+            const linesAttr = element.getAttribute("lines") || "[]";
+            try {
+              const decodedLines = decodeHTMLEntities(linesAttr);
+              return JSON.parse(decodedLines);
+            } catch (error) {
+              console.error(`Error parsing lines attribute: ${error}`);
+              return [];
+            }
+          },
+          renderHTML: (attributes) => {
+            return {
+              lines: JSON.stringify(attributes.lines),
+            };
+          },
         },
       };
     },
@@ -63,23 +84,6 @@ export default function NodeWrapper({
       return {
         type: this.name,
         attrs: this.attrs,
-      };
-    },
-    addStorage() {
-      return {
-        toJSON(node) {
-          return {
-            type: name,
-            attrs: {
-              width: node.attrs.width,
-              height: node.attrs.height,
-              someData: node.attrs.someData,
-            },
-          };
-        },
-        fromJSON(json, schema) {
-          return schema.nodes[name].create(json.attrs);
-        },
       };
     },
   });

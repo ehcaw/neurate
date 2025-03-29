@@ -6,7 +6,6 @@ export interface DrawingData {
 export interface PageContent {
   id: string;
   content: string;
-  drawings: DrawingData[];
   created_at: string;
   last_modified: string;
 }
@@ -14,7 +13,7 @@ export interface PageContent {
 export interface Metadata {
   created_at: string;
   last_accessed: string;
-  note_tpe: "free_note" | "notebook";
+  note_type: "free_note" | "notebook";
   tags: string[];
 }
 

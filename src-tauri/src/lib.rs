@@ -5,8 +5,8 @@ mod fs;
 
 // Re-export the functions from the fs module
 use fs::{
-  calculate_directory_size, create_directory, delete_path, move_path, path_exists, read_file,
-  write_file,
+  calculate_directory_size, create_directory, create_new_note, delete_path, gather_notes,
+  get_notes_tree, move_path, path_exists, read_file, update_title, write_file,
 };
 
 #[tauri::command]
@@ -34,7 +34,11 @@ pub fn run() {
       path_exists,
       move_path,
       delete_path,
-      calculate_directory_size
+      calculate_directory_size,
+      create_new_note,
+      gather_notes,
+      get_notes_tree,
+      update_title
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

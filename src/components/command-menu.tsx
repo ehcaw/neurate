@@ -11,7 +11,7 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
-import type { Note } from "@/lib/note-utils";
+import { Note } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface CommandMenuProps {

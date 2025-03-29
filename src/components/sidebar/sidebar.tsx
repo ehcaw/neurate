@@ -1,7 +1,7 @@
 "use client";
 
-import type React from "react";
-import { useMemo, useState, useCallback, useRef } from "react";
+import React from "react";
+import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -19,7 +19,7 @@ import {
   Star,
   X,
 } from "lucide-react";
-import type { Note } from "@/lib/note-utils";
+import { Note } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { KeyboardHelp } from "@/components/keyboard-help";
 import {
@@ -72,31 +72,23 @@ export function Sidebar({
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Convert flat notes to tree structure
-  const notesTree = useMemo(() => {
-    // For demo purposes, let's create a sample folder structure
-    // In a real app, you'd get this from your Rust backend
-    const extendedNotes: ExtendedNote[] = notes.map((note, index) => {
-      // Assign some notes to folders for demonstration
-      let path: string[] = [];
-      if (index % 3 === 0) {
-        path = ["Projects"];
-      } else if (index % 5 === 0) {
-        path = ["Archive"];
-      } else if (index % 7 === 0) {
-        path = ["Projects", "Personal"];
-      }
+  const [notesTree, setNotesTree] = useState<any>({ root: { children: {} } });
 
-      return {
-        ...note,
-        path,
-        isModified: index % 4 === 0,
-        lastModified: new Date(Date.now() - Math.random() * 10000000000),
-        isPinned: index % 9 === 0,
-      };
-    });
+  // Fetch the notes tree from the Rust backend
+  const fetchNotesTree = useCallback(async () => {
+    try {
+      // Call the Rust function to get the organized notes tree structure
+      const treeData = await invoke("get_notes_tree");
+      setNotesTree(treeData);
+    } catch (error) {
+      console.error("Failed to fetch notes tree:", error);
+    }
+  }, []);
 
-    return buildNoteTree(extendedNotes);
-  }, [notes]);
+  // Load the notes tree when the component mounts or when notes change
+  useEffect(() => {
+    fetchNotesTree();
+  }, [fetchNotesTree, notes]); // Re-fetch when notes change
 
   // Get recently modified notes
   const recentNotes = useMemo(() => {
@@ -124,7 +116,7 @@ export function Sidebar({
     return notes.filter(
       (note) =>
         note.title.toLowerCase().includes(query) ||
-        note.content.toLowerCase().includes(query),
+        note.pages[0].content.toLowerCase().includes(query),
     );
   }, [notes, searchQuery]);
 
@@ -145,9 +137,11 @@ export function Sidebar({
   // Handlers
   const handleNoteClick = useCallback(
     (id: string) => {
+      console.log(`handleNoteClick called with id: ${id}`);
+      console.log(`Current activeNoteId: ${activeNoteId}`);
       setActiveNoteId(id);
     },
-    [setActiveNoteId],
+    [setActiveNoteId, activeNoteId],
   );
 
   const handleDeleteClick = useCallback(
@@ -229,7 +223,7 @@ export function Sidebar({
     return tree;
   }
 
-  // Render tree recursively
+  // render tree recursively
   const renderTree = useCallback(
     (node: any, path: string[] = []) => {
       if (!node) return null;
@@ -290,7 +284,7 @@ export function Sidebar({
 
               {isExpanded && (
                 <div className="ml-3 pl-2 border-l border-border">
-                  {renderTree(value.children, [...path, key])}
+                  {renderTree(value.children, currentPath)}
                 </div>
               )}
             </div>
@@ -298,15 +292,18 @@ export function Sidebar({
         } else if (value.type === "note") {
           return (
             <NoteTreeItem
-              key={value.id}
+              key={value.id} // Use the clean ID
               note={{
-                id: value.id,
-                title: value.title,
-                isModified: value.isModified,
-                isPinned: value.isPinned,
+                id: value.id, // Use the clean ID, not the fileId
+                title: value.title || "Untitled",
+                isModified: value.isModified || false,
+                isPinned: value.isPinned || false,
               }}
               isActive={activeNoteId === value.id}
-              onClick={() => handleNoteClick(value.id)}
+              onClick={() => {
+                console.log("Clicking note with ID:", value.id);
+                handleNoteClick(value.id);
+              }}
               onDelete={(e) => handleDeleteClick(e, value.id)}
               onPin={() => handlePinNote(value.id)}
             />
@@ -472,7 +469,9 @@ export function Sidebar({
                     icon={<FileText className="h-3.5 w-3.5" />}
                     defaultOpen
                   >
-                    {renderTree(notesTree.root.children)}
+                    <React.Fragment key="file-tree-content">
+                      {renderTree(notesTree.root.children)}
+                    </React.Fragment>
                   </SidebarSection>
                 </div>
               ) : (

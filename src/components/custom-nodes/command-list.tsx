@@ -275,20 +275,15 @@ const SlashCommands = Extension.create({
               // Create the tippy instance
               const getReferenceClientRect = () => {
                 const rect = props.clientRect?.();
-                // Ensure we never return null to satisfy tippy's type requirements
-                return (
-                  rect || {
-                    top: 0,
-                    left: 0,
-                    bottom: 0,
-                    right: 0,
-                    width: 0,
-                    height: 0,
-                  }
-                );
+                if (rect) return rect;
+
+                // Create a DOMRect-compatible object
+                return new DOMRect(0, 0, 0, 0);
               };
 
-              const tippyInstance = tippy("body", {
+              const targetElement = document.body;
+
+              const tippyInstance = tippy(targetElement, {
                 getReferenceClientRect,
                 appendTo: () => document.body,
                 content: component.element,
@@ -299,7 +294,7 @@ const SlashCommands = Extension.create({
               });
 
               // Store the instance properly
-              popup = tippyInstance[0];
+              popup = tippyInstance;
             },
 
             onUpdate(props) {

@@ -1,7 +1,9 @@
 "use client";
 import "@/components/styles.module.scss";
 
+import { useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
+import { Input } from "../ui/input";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
@@ -21,10 +23,11 @@ import {
   FocusIcon,
   Pencil,
 } from "lucide-react";
-import type { Note } from "@/lib/note-utils";
+import { Note } from "@/lib/types";
 import SlashCommands from "../custom-nodes/command-list";
 import NodeWrapper from "../custom-nodes/node-wrapper";
 import SketchPadImpl from "../custom-nodes/sketch";
+import { invoke } from "@tauri-apps/api/core";
 
 interface TiptapProps {
   note: Note;
@@ -34,6 +37,7 @@ interface TiptapProps {
 
 export const Tiptap = forwardRef<any, TiptapProps>(
   ({ note, updateNote, setIsPreviewMode }, ref) => {
+    const [localTitle, setLocalTitle] = useState(note.title || "");
     const editor = useEditor({
       extensions: [
         StarterKit,
@@ -49,11 +53,20 @@ export const Tiptap = forwardRef<any, TiptapProps>(
           props: {},
         }),
       ],
-      content: note.content,
+      content: note.pages[0].content,
       onUpdate: ({ editor }) => {
         // Debounced save logic can be implemented here
-        const content = editor.getHTML();
-        updateNote(note.id, { content });
+        const newContent = editor.getHTML();
+        updateNote(note.id, {
+          pages: [
+            {
+              id: note.pages[0].id,
+              created_at: note.pages[0].created_at,
+              last_modified: String(Date.now()),
+              content: newContent,
+            },
+          ],
+        });
       },
     });
     useImperativeHandle(ref, () => ({
@@ -67,10 +80,14 @@ export const Tiptap = forwardRef<any, TiptapProps>(
 
     // Update editor content when note changes
     useEffect(() => {
-      if (editor && note.content !== editor.getHTML()) {
-        editor.commands.setContent(note.content);
+      if (editor && note.pages[0].content !== editor.getHTML()) {
+        editor.commands.setContent(note.pages[0].content);
       }
-    }, [editor, note.id, note.content]);
+    }, [editor, note.id, note.pages[0].content]);
+
+    useEffect(() => {
+      setLocalTitle(note.title || "");
+    }, [note.id, note.title]);
 
     // AI feature example - could be triggered by a button or slash command
     const generateAIContent = useCallback(() => {
@@ -133,15 +150,38 @@ export const Tiptap = forwardRef<any, TiptapProps>(
       }
     };
 
+    const updateTitle = (title: String) => {
+      console.log(note.id);
+      invoke("update_title", { path: note.id, newTitle: title });
+    };
+
     if (!editor) return null;
 
     return (
       <div className="flex flex-col h-full" data-editor>
         <div className="flex items-center justify-between p-2 border-b">
-          <input
+          <Input
             type="text"
-            value={note.title}
-            onChange={(e) => updateNote(note.id, { title: e.target.value })}
+            value={localTitle}
+            onChange={(e) => {
+              setLocalTitle(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                updateNote(note.id, { title: localTitle });
+                console.log(note.id);
+                invoke("update_title", { path: note.id, newTitle: localTitle });
+                e.currentTarget.blur();
+              }
+            }}
+            onBlur={(e) => {
+              // Also update when the input loses focus (user clicks elsewhere)
+              if (localTitle !== note.title) {
+                updateNote(note.id, { title: localTitle });
+                invoke("update_title", { path: note.id, newTitle: localTitle });
+              }
+            }}
             placeholder="Untitled"
             className="flex-1 bg-transparent border-none outline-none text-lg font-medium"
           />

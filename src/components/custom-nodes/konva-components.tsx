@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Stage, Layer, Line } from "react-konva";
+import { DrawingData } from "@/lib/types";
 import Konva from "konva";
 
 interface Line {
@@ -10,25 +11,37 @@ interface Line {
 interface KonvaCanvasProps {
   width: number;
   height: number;
-  lines: Line[];
-  onChange: (lines: Line[]) => void;
+  initialLines: DrawingData[];
+  onChange: (lines: DrawingData[]) => void;
 }
 
 const KonvaCanvas: React.FC<KonvaCanvasProps> = ({
   width,
   height,
-  lines: initialLines,
+  initialLines: initialLines = [],
   onChange,
 }) => {
-  const [lines, setLines] = useState<Line[]>(initialLines);
+  const [lines, setLines] = useState<DrawingData[]>(initialLines || []);
   const [tool, setTool] = useState<"brush" | "eraser">("brush");
   const isDrawing = useRef(false);
+  const isInitialized = useRef(false);
 
   // Update parent when lines change
   useEffect(() => {
     onChange(lines);
-    console.log(lines);
   }, [lines, onChange]);
+
+  useEffect(() => {
+    if (
+      initialLines &&
+      Array.isArray(initialLines) &&
+      initialLines.length > 0 &&
+      !isInitialized.current
+    ) {
+      setLines(initialLines);
+      isInitialized.current = true;
+    }
+  }, [initialLines]);
 
   const handleMouseDown = (
     e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
