@@ -24,19 +24,18 @@ import {
   Pencil,
 } from "lucide-react";
 import { Note } from "@/lib/types";
-import SlashCommands from "../custom-nodes/command-list";
-import NodeWrapper from "../custom-nodes/node-wrapper";
-import SketchPadImpl from "../custom-nodes/sketch";
+import SlashCommands from "../custom-notebook-node/command-list";
+import NodeWrapper from "../custom-notebook-node/node-wrapper";
+import SketchPadImpl from "../custom-notebook-node/sketch";
 import { invoke } from "@tauri-apps/api/core";
 
 interface TiptapProps {
   note: Note;
   updateNote: (id: string, updates: Partial<Note>) => void;
-  setIsPreviewMode: (isPreview: boolean) => void;
 }
 
 export const Tiptap = forwardRef<any, TiptapProps>(
-  ({ note, updateNote, setIsPreviewMode }, ref) => {
+  ({ note, updateNote }, ref) => {
     const [localTitle, setLocalTitle] = useState(note.title || "");
     const editor = useEditor({
       extensions: [
@@ -185,17 +184,6 @@ export const Tiptap = forwardRef<any, TiptapProps>(
             placeholder="Untitled"
             className="flex-1 bg-transparent border-none outline-none text-lg font-medium"
           />
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => setIsPreviewMode(true)}
-            >
-              <Eye className="h-4 w-4" />
-              <span className="hidden sm:inline">Preview</span>
-            </Button>
-          </div>
         </div>
 
         <div className="border-b p-1 flex items-center gap-1 bg-muted/30">

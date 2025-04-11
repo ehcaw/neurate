@@ -34,6 +34,13 @@ import { SidebarSection } from "./sidebar-section";
 import { NoteTreeItem } from "./note-tree-item";
 import { useHotkeys, useHotkeysWithCallback } from "@/hooks/use-hotkeys";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+} from "../ui/dropdown-menu";
 
 // Extended Note type with additional properties
 interface ExtendedNote extends Note {
@@ -47,7 +54,7 @@ interface SidebarProps {
   notes: Note[];
   activeNoteId: string | null;
   setActiveNoteId: (id: string) => void;
-  createNote: () => void;
+  createNote: (note_type: string) => void;
   deleteNote: (id: string) => void;
   isOpen: boolean;
   setIsOpen: (isOpen: boolean) => void;
@@ -268,7 +275,7 @@ export function Sidebar({
                   </div>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
-                  <ContextMenuItem onSelect={() => createNote()}>
+                  <ContextMenuItem onSelect={() => createNote("notebook")}>
                     New Note
                   </ContextMenuItem>
                   <ContextMenuItem onSelect={handleCreateFolder}>
@@ -398,15 +405,29 @@ export function Sidebar({
                       EXPLORER
                     </span>
                     <div className="flex gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        onClick={createNote}
-                        title="New note"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger>
+                          <Plus className="h-3.5 w-3.5" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="w-full">
+                          <DropdownMenuItem
+                            onClick={() => createNote("notebook")}
+                          >
+                            Notebook
+                            <DropdownMenuShortcut className="text-xs text-gray-500">
+                              Block based note taking
+                            </DropdownMenuShortcut>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => createNote("freenote")}
+                          >
+                            Free-note
+                            <DropdownMenuShortcut className="text-xs text-gray-500">
+                              Flexible canvas with layers
+                            </DropdownMenuShortcut>
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <Button
                         variant="ghost"
                         size="icon"

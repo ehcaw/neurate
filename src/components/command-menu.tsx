@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 interface CommandMenuProps {
   notes: Note[];
   setActiveNoteId: (id: string) => void;
-  createNote: () => void;
+  createNote: (note_type: string) => void;
   isOpen: boolean;
   setIsOpen: (isOpen: boolean) => void;
 }
@@ -48,7 +48,7 @@ export function CommandMenu({
   };
 
   const handleCreateNote = () => {
-    createNote();
+    createNote("notebook");
     setIsOpen(false);
   };
 

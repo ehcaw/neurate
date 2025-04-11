@@ -197,22 +197,42 @@ pub fn create_new_note(title: &str, note_type: &str) -> Result<String, String> {
   let notes_dir = app_dir.join("notes");
   let file_name = format!("{}.json", Uuid::new_v4());
   let file_path = notes_dir.join(&file_name);
-  let note = json!({
-      "id": file_path,
-      "title": title,
-      "metadata": {
-          "created_at": now,
-          "last_accessed": now,
-          "note_type": note_type,
-          "tags": []
-      },
-      "pages": [{
+  let note: serde_json::Value;
+  if note_type == &String::from("notebook") {
+    note = json!({
+        "id": file_path,
+        "title": title,
+        "metadata": {
+            "created_at": now,
+            "last_accessed": now,
+            "note_type": note_type,
+            "tags": []
+        },
+        "pages": [{
+            "id": Uuid::new_v4().to_string(),
+            "content": "<p>hello</p>",
+            "created_at": now,
+            "last_modified": now
+        }]
+    });
+  } else {
+    note = json!({
+        "id": file_path,
+        "title": title,
+        "metadata": {
+            "created_at": now,
+            "last_accessed": now,
+            "note_type": note_type,
+            "tags": [],
+        },
+        "pages": [{
           "id": Uuid::new_v4().to_string(),
-          "content": "<p>hello</p>",
-          "created_at": now,
+          "text_layer":  "",
+          "drawing_layer": "",
           "last_modified": now
-      }]
-  });
+        }]
+    });
+  }
   let path_str = file_path
     .to_str()
     .ok_or_else(|| "Invalid path encoding".to_string())?;
@@ -231,7 +251,7 @@ pub fn create_new_note(title: &str, note_type: &str) -> Result<String, String> {
 
 // Additional functionality to update an existing note
 #[tauri::command]
-pub fn update_note_content(path: &str, page_id: &str, content: &str) -> Result<(), String> {
+pub fn update_notebook_content(path: &str, page_id: &str, content: &str) -> Result<(), String> {
   // Read the current note
   let note_str = read_file(path)?;
 
@@ -253,7 +273,6 @@ pub fn update_note_content(path: &str, page_id: &str, content: &str) -> Result<(
       }
     }
   }
-
   // Update the last_accessed field
   if let Some(metadata) = note["metadata"].as_object_mut() {
     let now = Utc::now();
@@ -264,6 +283,40 @@ pub fn update_note_content(path: &str, page_id: &str, content: &str) -> Result<(
   let updated_str =
     serde_json::to_string_pretty(&note).map_err(|e| format!("Failed to serialize note: {}", e))?;
 
+  write_file(path, &updated_str)
+}
+
+#[tauri::command]
+pub fn update_freenote_content(
+  path: &str,
+  page_id: &str,
+  content: &str,
+  lines: &str,
+) -> Result<(), String> {
+  let note_str = read_file(path)?;
+  let mut note: Value =
+    serde_json::from_str(&note_str).map_err(|e| format!("Failed to parse note JSON: {}", e))?;
+  if let Some(pages) = note["pages"].as_array_mut() {
+    let now = Utc::now();
+
+    for page in pages.iter_mut() {
+      if let Some(id) = page["id"].as_str() {
+        if id == page_id {
+          page["content"] = json!(content);
+          page["lines"] = json!(lines);
+          page["last_modified"] = json!(now);
+          break;
+        }
+      }
+    }
+  }
+
+  if let Some(metadata) = note["metadata"].as_object_mut() {
+    let now = Utc::now();
+    metadata.insert("last_accessed".to_string(), json!(now));
+  }
+  let updated_str =
+    serde_json::to_string_pretty(&note).map_err(|e| format!("Failed to serialize note: {}", e))?;
   write_file(path, &updated_str)
 }
 
