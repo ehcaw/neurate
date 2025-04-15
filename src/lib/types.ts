@@ -53,3 +53,19 @@ export interface StandaloneRichSketchpadProps {
   height?: number;
   updateNote: (id: string, updates: Partial<Note>) => void;
 }
+
+export interface Line {
+  tool: "brush" | "eraser";
+  points: number[];
+  color: string | undefined;
+  width: number;
+}
+
+// Define this interface somewhere in your types file
+export interface TreeNode {
+  id: string; // Full path
+  path: string; // Full path
+  name: string; // File or directory name
+  is_directory: boolean;
+  children?: TreeNode[]; // Optional array for directories
+}

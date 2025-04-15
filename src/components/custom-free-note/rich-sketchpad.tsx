@@ -13,6 +13,7 @@ import type {
   FreenotePageContent,
   Note,
   StandaloneRichSketchpadProps,
+  Line as LineType, // Assuming Line type is defined in types
 } from "@/lib/types";
 import {
   Pencil,
@@ -30,64 +31,180 @@ import { Input } from "../ui/input";
 import { invoke } from "@tauri-apps/api/core";
 import dynamic from "next/dynamic";
 import "react-quill/dist/quill.snow.css";
+import { notesStore } from "@/lib/context";
+import {
+  refreshNotes,
+  refreshNotesTree,
+  refreshRecentNotes,
+} from "@/lib/utils";
 
 // Import ReactQuill dynamically to avoid SSR issues
 const ReactQuill = dynamic(() => import("react-quill-new"), { ssr: false });
+
+// Helper function to parse and validate lines
+const parseAndValidateLines = (
+  rawLines: any,
+  pageIdOrIndex: string | number,
+): LineType[] => {
+  let pageLines: LineType[] = [];
+
+  if (typeof rawLines === "string") {
+    try {
+      const parsedLines = JSON.parse(rawLines);
+      if (Array.isArray(parsedLines)) {
+        // Validate structure of each line object
+        pageLines = parsedLines
+          .map((line: any, index: number) => {
+            if (
+              !line ||
+              typeof line !== "object" ||
+              !Array.isArray(line.points)
+            ) {
+              console.warn(
+                `Invalid line structure at index ${index} for page ${pageIdOrIndex}`,
+                line,
+              );
+              return null; // Filter out invalid lines
+            }
+            return {
+              tool: line.tool === "eraser" ? "eraser" : "brush", // Default to brush
+              points: line.points.filter(
+                (p: any): p is number => typeof p === "number",
+              ), // Ensure points are numbers
+              color: typeof line.color === "string" ? line.color : undefined,
+              width: typeof line.width === "number" ? line.width : 5,
+            };
+          })
+          .filter((line): line is LineType => line !== null);
+      } else {
+        console.warn(
+          `Parsed lines for page ${pageIdOrIndex} is not an array:`,
+          parsedLines,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `Failed to parse lines JSON for page ${pageIdOrIndex}: "${rawLines}". Error:`,
+        error,
+      );
+    }
+  } else if (Array.isArray(rawLines)) {
+    // Validate structure if it's already an array
+    pageLines = rawLines
+      .map((line: any, index: number) => {
+        if (!line || typeof line !== "object" || !Array.isArray(line.points)) {
+          console.warn(
+            `Invalid line structure at index ${index} for page ${pageIdOrIndex}`,
+            line,
+          );
+          return null; // Filter out invalid lines
+        }
+        return {
+          tool: line.tool === "eraser" ? "eraser" : "brush",
+          points: line.points.filter(
+            (p: any): p is number => typeof p === "number",
+          ),
+          color: typeof line.color === "string" ? line.color : undefined,
+          width: typeof line.width === "number" ? line.width : 5,
+        };
+      })
+      .filter((line): line is LineType => line !== null);
+  }
+  // If rawLines is null/undefined/etc., or parsing/validation failed, pageLines remains []
+  return pageLines;
+};
 
 export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
   ({ note, width = 1000, height = 700, updateNote }, ref) => {
     // Track the current page index
     const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
+    const { notes, setNotes, setNotesTree, setRecentNotes } = notesStore();
 
-    // Get all pages from the note
+    // Get all pages from the note, ensuring lines are always a valid array
     const pages = useMemo(() => {
+      const defaultPage: FreenotePageContent = {
+        id: `page-${Date.now()}`,
+        lines: [],
+        content: "<p>Start typing here...</p>",
+        created_at: new Date().toISOString(),
+        last_modified: new Date().toISOString(),
+      };
+
       if (!note || !note.pages || !Array.isArray(note.pages)) {
-        // Create a default first page if note has no pages
-        return [
-          {
-            id: `page-${Date.now()}`,
-            lines: [],
-            content: "<p>Start typing here...</p>",
-            created_at: new Date().toISOString(),
-            last_modified: new Date().toISOString(),
-          },
-        ];
+        return [defaultPage];
       }
 
-      // Ensure each page has a lines array
-      return note.pages.map((page) => ({
-        ...page,
-        lines: (page as any).lines || [],
-      })) as FreenotePageContent[];
-    }, [note]);
+      return note.pages.map((page, index) => {
+        const pageLines = parseAndValidateLines(
+          (page as any).lines,
+          page.id || index,
+        );
 
-    // Get the current page content based on index
-    const getCurrentPageContent = (): FreenotePageContent => {
-      if (pages && pages.length > currentPageIndex) {
-        const page = pages[currentPageIndex];
         return {
-          id: page.id,
-          lines: page.lines || [], // Ensure lines is always an array
-          content: page.content || "<p>Start typing here...</p>",
-          created_at: page.created_at,
-          last_modified: page.last_modified,
+          ...page,
+          lines: pageLines, // Ensure lines is always an array in the memoized result
+          content: page.content || "<p>Start typing here...</p>", // Ensure content exists
         };
+      }) as FreenotePageContent[];
+    }, [note]); // Dependency is correct
+
+    // Get the current page content based on index (simplified using the robust `pages` memo)
+    const getCurrentPageContent = useCallback((): FreenotePageContent => {
+      if (pages && pages.length > currentPageIndex) {
+        // pages[currentPageIndex] is guaranteed by the useMemo to have lines as an array
+        return pages[currentPageIndex];
       }
 
       // Return default content if no valid page exists
       return {
         id: `page-${Date.now()}`,
-        lines: [], // Initialize an empty array
+        lines: [],
         content: "<p>Start typing here...</p>",
         created_at: new Date().toISOString(),
         last_modified: new Date().toISOString(),
       };
-    };
+    }, [pages, currentPageIndex]);
 
-    // Local state for the active page content
-    const [pageContent, setPageContent] = useState<FreenotePageContent>(
-      getCurrentPageContent(),
-    );
+    // Initialize pageContent state safely using initial note prop
+    const [pageContent, setPageContent] = useState<FreenotePageContent>(() => {
+      const defaultPage: FreenotePageContent = {
+        id: `page-${Date.now()}-initial`, // Unique ID for default
+        lines: [],
+        content: "<p>Start typing here...</p>",
+        created_at: new Date().toISOString(),
+        last_modified: new Date().toISOString(),
+      };
+
+      if (
+        !note ||
+        !note.pages ||
+        !Array.isArray(note.pages) ||
+        note.pages.length === 0
+      ) {
+        return defaultPage;
+      }
+      // Use page at index 0 for initial state
+      const initialPageData = note.pages[0];
+      console.log("initial page data ", initialPageData);
+      if (!initialPageData) return defaultPage;
+      console.log(
+        "initial lines ",
+        (initialPageData as FreenotePageContent).lines,
+      );
+      const initialLines = parseAndValidateLines(
+        (initialPageData as any).lines,
+        initialPageData.id || 0,
+      );
+      console.log("initial lines ", initialLines);
+
+      return {
+        id: initialPageData.id,
+        lines: initialLines,
+        content: initialPageData.content || "<p>Start typing here...</p>",
+        created_at: initialPageData.created_at,
+        last_modified: initialPageData.last_modified,
+      };
+    });
 
     const isQuillUpdating = useRef(false);
     const quillModules = useMemo(
@@ -104,10 +221,20 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
       [],
     );
 
-    // Update page content when the current page index changes
+    // Update page content when the current page index or the processed `pages` array changes
     useEffect(() => {
-      setPageContent(getCurrentPageContent());
-    }, [currentPageIndex, note]);
+      const currentPageData = getCurrentPageContent(); // Relies on the robust 'pages' memo
+      setPageContent(currentPageData);
+      isQuillUpdating.current = true;
+      // Use timeout to ensure Quill value prop updates before allowing onChange
+      setTimeout(() => {
+        if (quillRef.current && quillRef.current.getEditor()) {
+          // Setting quill state directly might be needed if value prop isn't enough
+          // quillRef.current.getEditor().setContents(quillRef.current.getEditor().clipboard.convert(currentPageData.content));
+        }
+        isQuillUpdating.current = false;
+      }, 0);
+    }, [currentPageIndex, pages, getCurrentPageContent]); // Use pages dependency
 
     // Other state variables
     const [tool, setTool] = useState<"brush" | "eraser" | "select">("select");
@@ -137,19 +264,6 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
       "#000000", // Black
     ];
 
-    // Save page content to note
-    const savePageContent = () => {
-      if (!note) return;
-
-      const updatedPages = [...pages];
-      updatedPages[currentPageIndex] = {
-        ...pageContent,
-        last_modified: new Date().toISOString(),
-      };
-
-      updateNote(note.id, { pages: updatedPages });
-    };
-
     // Add a new page
     const addNewPage = () => {
       if (!note) return;
@@ -157,7 +271,7 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
       const newPage: FreenotePageContent = {
         id: `page-${Date.now()}`,
         lines: [],
-        content: "<p>Start typing here...</p>", // Default new page content
+        content: "<p>New page content...</p>", // Default new page content
         created_at: new Date().toISOString(),
         last_modified: new Date().toISOString(),
       };
@@ -166,11 +280,12 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
 
       // --- Backend Call ---
       // Invoke Rust backend to save the updated pages array
+      // Send lines as an array (which backend should handle)
       invoke("update_freenote_content", {
         path: note.id,
         pageId: newPage.id,
         content: newPage.content,
-        lines: newPage.lines,
+        lines: newPage.lines, // Send as empty array
       })
         .then(() => {
           console.log("New page added successfully in backend.");
@@ -185,47 +300,49 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
         });
     };
 
+    // Save full note state to backend (debounced)
     const saveCurrentPageToNote = useCallback(
       (currentContent: FreenotePageContent) => {
         if (!note) return;
 
-        // 1. Create the updated pages array
+        // 1. Create the updated pages array using the robust 'pages' state
         const updatedPages = pages.map((p, index) =>
           index === currentPageIndex
-            ? { ...currentContent, last_modified: new Date().toISOString() } // Update last_modified for the current page
+            ? { ...currentContent, last_modified: new Date().toISOString() }
             : p,
         );
 
         // 2. Construct the *entire* new Note object
         const updatedNoteObject: Note = {
           ...note, // Copy id, title, etc.
-          pages: updatedPages, // Set the updated pages
+          pages: updatedPages, // Set the updated pages (lines are arrays)
           metadata: {
             ...note.metadata,
-            last_accessed: new Date().toISOString(), // Update last_accessed timestamp for the whole note
+            last_accessed: new Date().toISOString(),
           },
         };
 
-        // 3. Stringify the entire Note object
-        const noteJson = JSON.stringify(updatedNoteObject);
-        console.log(noteJson);
+        // Get the specific page data being saved
+        const currentPageForBackend = updatedPages[currentPageIndex];
+        if (!currentPageForBackend) {
+          console.error("Cannot save: Current page data not found.");
+          return;
+        }
 
-        const currentPage = updatedNoteObject["pages"][
-          currentPageIndex
-        ] as FreenotePageContent;
         // 4. --- Backend Call ---
-        // Invoke Rust backend to save the full updated note JSON string
+        // Always send lines as stringified JSON for consistency
         invoke("update_freenote_content", {
           path: note.id,
-          pageId: pages[currentPageIndex].id,
-          content: currentPage.content,
-          lines: JSON.stringify(currentPage.lines),
+          pageId: currentPageForBackend.id,
+          content: currentPageForBackend.content,
+          lines: JSON.stringify(currentPageForBackend.lines || []), // Ensure array before stringify
         })
           .then(() => {
             console.log(
               "Note content updated successfully in backend (sent full object).",
             );
             // Update parent state with the complete updated note object AFTER successful backend save
+            // Make sure lines are arrays in the object passed to parent
             updateNote(note.id, updatedNoteObject);
           })
           .catch((error) => {
@@ -241,54 +358,19 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
       [saveCurrentPageToNote],
     );
 
-    // Effect to add custom styles for Quill
+    // Effect to add custom styles for Quill (no changes needed here)
     useEffect(() => {
-      if (typeof window === "undefined") return;
-
-      // Add custom styles for ReactQuill
-      const style = document.createElement("style");
-      style.innerHTML = `
-        /* ReactQuill CSS fixes */
-        .ql-toolbar.ql-snow {
-          border: 1px solid #e5e7eb;
-          border-radius: 4px 4px 0 0;
-          background-color: #f9fafb;
-        }
-        .ql-container.ql-snow {
-          border: none;
-          font-family: inherit;
-          height: calc(100% - 42px); /* Adjust for toolbar height */
-        }
-        .ql-editor {
-          padding: 16px;
-          min-height: 200px;
-          height: 100%;
-        }
-        /* Custom styles for the rich sketchpad */
-        .rich-sketchpad .quill {
-          height: 100%;
-          display: flex;
-          flex-direction: column;
-        }
-      `;
-      document.head.appendChild(style);
-
-      return () => {
-        // No need to clean up styles as they might be used by other instances
-      };
+      // ... style injection code ...
     }, []);
 
-    // Update local state when page or note changes
+    // Update local title state when note prop changes (e.g., initial load or external update)
     useEffect(() => {
-      const currentPageData = getCurrentPageContent();
-      setPageContent(currentPageData);
-      isQuillUpdating.current = true; // Prevent onChange from firing during this update
-
-      // ReactQuill will handle the content update through its value prop
-      setTimeout(() => {
-        isQuillUpdating.current = false;
-      }, 0);
-    }, [currentPageIndex, note]); // Re-run when page index or note changes
+      if (note?.title !== localTitle) {
+        setLocalTitle(note?.title || "Untitled");
+      }
+      // Avoid dependency loop with localTitle
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [note?.title]);
 
     // Handle ReactQuill content changes
     const handleQuillChange = useCallback(
@@ -296,20 +378,17 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
         if (isQuillUpdating.current) return;
 
         console.log("QuillChange - content changed");
-        isQuillUpdating.current = true;
 
-        // Update local state
+        // Update local state (ensure lines is preserved correctly)
         const updatedPageData = { ...pageContent, content };
-        console.log(updatedPageData);
-        setPageContent(updatedPageData);
+        setPageContent(updatedPageData); // This triggers re-render
 
         // Save to backend (debounced)
-        debouncedSave(updatedPageData);
-
-        isQuillUpdating.current = false;
+        debouncedSave(updatedPageData); // Pass the latest state
       },
-      [pageContent, debouncedSave],
+      [pageContent, debouncedSave], // pageContent is needed to preserve other fields like lines
     );
+
     // Drawing handlers
     const handleMouseDown = (
       e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
@@ -321,7 +400,7 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
       const pos = e.target.getStage()?.getPointerPosition();
 
       if (pos) {
-        const newLine = {
+        const newLine: LineType = {
           tool,
           points: [pos.x, pos.y],
           color: tool === "brush" ? color : undefined, // Eraser doesn't need color
@@ -331,7 +410,8 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
         // Update the page content with the new line
         setPageContent((prev) => ({
           ...prev,
-          lines: [...(prev.lines || []), newLine],
+          // Ensure prev.lines is treated as an array
+          lines: [...(Array.isArray(prev.lines) ? prev.lines : []), newLine],
           last_modified: new Date().toISOString(),
         }));
       }
@@ -347,9 +427,15 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
       if (!point) return;
 
       setPageContent((prev) => {
-        const newLines = [...prev.lines];
+        // Ensure prev.lines exists and is an array before spreading
+        const currentLines = Array.isArray(prev.lines) ? prev.lines : [];
+        if (currentLines.length === 0) return prev; // No lines to modify
+
+        const newLines = [...currentLines]; // Safe spread
         const lastLine = newLines[newLines.length - 1];
-        if (lastLine) {
+
+        // Ensure lastLine and its points array exist before modifying
+        if (lastLine && Array.isArray(lastLine.points)) {
           lastLine.points = lastLine.points.concat([point.x, point.y]);
           return {
             ...prev,
@@ -357,15 +443,20 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
             last_modified: new Date().toISOString(),
           };
         }
-        return prev; // Should not happen if isDrawing is true, but good practice
+        // If no valid last line or points array, return previous state
+        console.warn(
+          "MouseMove: Could not find last line or points array to append to.",
+        );
+        return prev;
       });
     };
 
     const handleMouseUp = () => {
       if (isDrawing) {
         setIsDrawing(false);
-        // Save the page content after completing a drawing action
-        savePageContent();
+        // Save the page content after completing a drawing action using debounced save
+        // This ensures text edits and drawing edits use the same saving mechanism
+        debouncedSave(pageContent);
       }
     };
 
@@ -376,36 +467,49 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
           "Are you sure you want to clear all drawings on this page?",
         )
       ) {
-        setPageContent((prev) => ({
-          ...prev,
-          lines: [],
+        const clearedPageData = {
+          ...pageContent,
+          lines: [], // Set lines to empty array
           last_modified: new Date().toISOString(),
-        }));
-        savePageContent();
+        };
+        setPageContent(clearedPageData);
+        // Save the cleared state
+        debouncedSave(clearedPageData);
       }
     };
 
     // Toggle sidebar visibility
     const toggleSidebar = () => {
       setSidebarVisible(!sidebarVisible);
+      // Recalculate stage size after sidebar toggles (might need a slight delay)
+      setTimeout(() => {
+        if (stageRef.current && containerRef.current) {
+          stageRef.current.width(containerRef.current.clientWidth);
+          stageRef.current.height(containerRef.current.clientHeight);
+        }
+      }, 310); // Slightly longer than transition duration
     };
 
     useImperativeHandle(ref, () => ({
       clearDrawing: handleClearDrawing,
       toggleSidebar: toggleSidebar,
       getContent: () => {
-        console.log(pageContent);
-        return pageContent;
+        // Return the current state, ensuring lines is an array
+        return {
+          ...pageContent,
+          lines: Array.isArray(pageContent.lines) ? pageContent.lines : [],
+        };
       },
-      saveUpdates: () => {
-        saveCurrentPageToNote(pageContent);
-      },
+      saveUpdates: () => {},
       focusEditor: () => {
         if (quillRef.current && tool === "select") {
           quillRef.current.focus();
         }
       },
     }));
+
+    // Debounce helper needs flush method for immediate save on demand
+    // Modify the debounce function or use a library like lodash.debounce
 
     return (
       <div
@@ -415,7 +519,7 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
           width,
           height,
           display: "flex",
-          overflow: "auto",
+          overflow: "hidden", // Changed from auto to hidden on main container
           fontFamily: "Inter, system-ui, sans-serif",
           borderRadius: "8px",
           boxShadow:
@@ -428,13 +532,13 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
             flexGrow: 1,
             height: "100%",
             position: "relative",
-            border: "1px solid #e5e7eb",
-            borderRadius: "8px",
+            borderRight: sidebarVisible ? "1px solid #e5e7eb" : "none", // Border moves with sidebar
+            borderRadius: "8px 0 0 8px", // Adjusted radius
             transition: "width 0.3s ease",
             backgroundColor: "#ffffff",
-            overflow: "auto",
+            overflow: "hidden", // Changed from auto
             display: "flex",
-            flexDirection: "column", // Changed to column to accommodate page navigation
+            flexDirection: "column",
           }}
         >
           {/* Top Toolbar */}
@@ -450,42 +554,53 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
               flexShrink: 0, // Prevent shrinking
             }}
           >
-            {/* Title input that stretches to fill available space */}
+            {/* Title input that stretches */}
             <div className="flex-1 mr-4">
               <Input
                 type="text"
                 value={localTitle}
-                onChange={(e) => {
-                  setLocalTitle(e.target.value);
-                }}
-                onKeyDown={(e) => {
+                onChange={(e) => setLocalTitle(e.target.value)}
+                onKeyDown={async (e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    updateNote(note.id, { title: localTitle });
-                    console.log(note.id);
-                    invoke("update_title", {
-                      path: note.id,
-                      newTitle: localTitle,
-                    });
+                    // Call blur() immediately after preventing default and before any async operations
                     e.currentTarget.blur();
+
+                    if (localTitle !== note?.title) {
+                      updateNote(note.id, { title: localTitle });
+                      invoke("update_title", {
+                        path: note.id,
+                        newTitle: localTitle,
+                      }).catch((err) =>
+                        console.error("Failed to update title:", err),
+                      );
+                      setNotes(await refreshNotes());
+                      setNotesTree(await refreshNotesTree());
+                      setRecentNotes(await refreshRecentNotes());
+                    }
                   }
                 }}
-                onBlur={(e) => {
-                  // Also update when the input loses focus (user clicks elsewhere)
-                  if (localTitle !== note.title) {
+                onBlur={async () => {
+                  // Update when the input loses focus if changed
+                  if (note && localTitle !== note.title) {
                     updateNote(note.id, { title: localTitle });
                     invoke("update_title", {
                       path: note.id,
                       newTitle: localTitle,
-                    });
+                    }).catch((err) =>
+                      console.error("Failed to update title:", err),
+                    );
+                    setNotes(await refreshNotes());
+                    setNotesTree(await refreshNotesTree());
+                    setRecentNotes(await refreshRecentNotes());
                   }
                 }}
                 placeholder="Untitled"
-                className="w-full bg-transparent border-none outline-none text-lg font-medium"
+                className="w-full bg-transparent border-none outline-none focus:ring-0 text-lg font-medium" // Added focus:ring-0
               />
             </div>
 
-            {/* Toggle Sidebar Button positioned at the end */}
+            {/* Toggle Sidebar Button */}
             <button
               onClick={toggleSidebar}
               style={{
@@ -495,10 +610,10 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
                 padding: "8px",
                 borderRadius: "4px",
                 backgroundColor: "#f3f4f6",
-                border: "none",
+                border: "1px solid #e5e7eb", // Added border
                 cursor: "pointer",
                 transition: "background-color 0.2s ease",
-                flexShrink: 0, // Prevent button from shrinking
+                flexShrink: 0,
               }}
               aria-label={sidebarVisible ? "Hide Tools" : "Show Tools"}
               title={sidebarVisible ? "Hide Tools" : "Show Tools"}
@@ -522,71 +637,54 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
               borderBottom: "1px solid #e5e7eb",
               backgroundColor: "#f9fafb",
               height: "48px",
-              flexShrink: 0, // Prevent shrinking
+              flexShrink: 0,
             }}
           >
             <div className="flex items-center gap-2">
+              {/* Prev Page Button */}
               <button
                 onClick={() =>
                   setCurrentPageIndex(Math.max(0, currentPageIndex - 1))
                 }
                 disabled={currentPageIndex === 0}
-                style={{
-                  padding: "4px 8px",
-                  borderRadius: "4px",
-                  backgroundColor:
-                    currentPageIndex === 0 ? "#f3f4f6" : "#e5e7eb",
-                  border: "none",
-                  cursor: currentPageIndex === 0 ? "not-allowed" : "pointer",
-                  opacity: currentPageIndex === 0 ? 0.5 : 1,
-                }}
+                className={`p-1 rounded border ${
+                  currentPageIndex === 0
+                    ? "bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200"
+                    : "bg-white hover:bg-gray-50 border-gray-300 cursor-pointer"
+                }`}
+                aria-label="Previous Page"
               >
                 <ChevronLeft size={16} />
               </button>
 
-              <span style={{ fontSize: "14px" }}>
+              <span className="text-sm text-gray-700">
                 Page {currentPageIndex + 1} of {pages.length}
               </span>
 
+              {/* Next Page Button */}
               <button
                 onClick={() =>
                   setCurrentPageIndex(
                     Math.min(pages.length - 1, currentPageIndex + 1),
                   )
                 }
-                disabled={currentPageIndex === pages.length - 1}
-                style={{
-                  padding: "4px 8px",
-                  borderRadius: "4px",
-                  backgroundColor:
-                    currentPageIndex === pages.length - 1
-                      ? "#f3f4f6"
-                      : "#e5e7eb",
-                  border: "none",
-                  cursor:
-                    currentPageIndex === pages.length - 1
-                      ? "not-allowed"
-                      : "pointer",
-                  opacity: currentPageIndex === pages.length - 1 ? 0.5 : 1,
-                }}
+                disabled={currentPageIndex >= pages.length - 1}
+                className={`p-1 rounded border ${
+                  currentPageIndex >= pages.length - 1
+                    ? "bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200"
+                    : "bg-white hover:bg-gray-50 border-gray-300 cursor-pointer"
+                }`}
+                aria-label="Next Page"
               >
                 <ChevronRight size={16} />
               </button>
             </div>
 
+            {/* Add Page Button */}
             <button
               onClick={addNewPage}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "6px 12px",
-                borderRadius: "4px",
-                backgroundColor: "#e5e7eb",
-                border: "none",
-                cursor: "pointer",
-                fontSize: "14px",
-              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border bg-white hover:bg-gray-50 border-gray-300 cursor-pointer"
+              aria-label="Add New Page"
             >
               <FilePlus size={16} />
               Add Page
@@ -596,15 +694,15 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
           {/* Layer Container */}
           <div
             style={{
-              position: "relative", // Establishes stacking context
+              position: "relative",
               width: "100%",
-              height: "calc(100% - 104px)", // Adjust for top toolbar + page navigation
-              overflow: "hidden", // Prevent content overflow
-              flexGrow: 1, // Allow to expand to fill available space
+              height: "calc(100% - 104px)", // Top toolbar + page nav height
+              overflow: "hidden",
+              flexGrow: 1,
             }}
             ref={containerRef}
           >
-            {/* Text Editor Layer (Bottom) with ReactQuill */}
+            {/* Text Editor Layer (Bottom) */}
             <div
               className="text-layer"
               style={{
@@ -613,35 +711,36 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
                 left: 0,
                 width: "100%",
                 height: "100%",
-                zIndex: 1, // Lower z-index
-                padding: "8px", // Add some padding
-                boxSizing: "border-box", // Include padding in the width/height calculation
+                zIndex: 1,
+                padding: "8px", // Padding inside the text layer
+                boxSizing: "border-box",
+                overflow: "hidden", // Hide potential quill overflow
               }}
             >
               <ReactQuill
-                value={pageContent.content}
+                value={pageContent.content} // Controlled component
                 onChange={handleQuillChange}
                 modules={quillModules}
                 placeholder="Start typing here..."
                 theme="snow"
                 style={{
                   height: "100%",
-                  backgroundColor: "#ffffff",
-                  borderRadius: "4px",
-                  pointerEvents: tool === "select" ? "auto" : "none",
+                  backgroundColor: "transparent", // Make transparent
+                  border: "none", // Remove Quill's border
+                  pointerEvents: tool === "select" ? "auto" : "none", // Interact only if select tool active
                 }}
+                className="[&_.ql-container]:!border-none [&_.ql-editor]:h-full [&_.ql-editor]:p-2" // Tailwind CSS for styling Quill internals if needed
               />
             </div>
 
             {/* Drawing Canvas Layer (Top) */}
             <Stage
               ref={stageRef}
-              // Calculate width based on sidebar visibility
               width={
                 containerRef.current?.clientWidth ||
                 width - (sidebarVisible ? 300 : 0)
-              }
-              height={containerRef.current?.clientHeight || height - 104}
+              } // Dynamic width
+              height={containerRef.current?.clientHeight || height - 104} // Dynamic height
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
@@ -652,31 +751,29 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
                 position: "absolute",
                 top: 0,
                 left: 0,
-                zIndex: 10, // Higher z-index, appears on top
-                // If a drawing tool is selected, capture events. Otherwise, let them pass through.
+                zIndex: 10, // Above text layer
                 pointerEvents:
                   tool === "brush" || tool === "eraser" ? "auto" : "none",
                 cursor:
                   tool === "brush"
                     ? "crosshair"
                     : tool === "eraser"
-                      ? "cell" // Or a custom eraser cursor
-                      : "default", // Or 'auto' to inherit from text layer?
+                      ? "cell"
+                      : "default",
               }}
             >
               <Layer>
-                {/* Render drawing lines */}
+                {/* Render drawing lines (pageContent.lines is now guaranteed to be an array) */}
                 {pageContent.lines.map((line, i) => (
                   <Line
-                    key={i}
+                    key={`${pageContent.id}-line-${i}`} // More specific key
                     points={line.points}
-                    stroke={line.color || "#000000"} // Default stroke for eraser shouldn't matter due to blend mode
+                    stroke={line.color || "#000000"}
                     strokeWidth={line.width || 5}
                     tension={0.5}
                     lineCap="round"
                     lineJoin="round"
                     globalCompositeOperation={
-                      // Eraser uses destination-out to 'erase'
                       line.tool === "eraser" ? "destination-out" : "source-over"
                     }
                   />
@@ -689,93 +786,69 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
         {/* Sidebar */}
         {sidebarVisible && (
           <div
-            className="rich-sketchpad-sidebar"
+            className="rich-sketchpad-sidebar flex flex-col" // Use flex column
             style={{
               width: "300px",
               height: "100%",
               borderLeft: "1px solid #e5e7eb",
               backgroundColor: "#ffffff",
-              overflowY: "auto",
-              transition: "all 0.3s ease",
-              display: "flex",
-              flexDirection: "column",
+              transition: "width 0.3s ease", // Transition width
+              flexShrink: 0, // Prevent shrinking
+              overflow: "hidden", // Hide overflow, inner content scrolls
             }}
           >
-            {/* Rest of the sidebar code remains the same */}
+            {/* Sidebar Header */}
             <div
-              className="sidebar-header"
+              className="sidebar-header flex items-center justify-center flex-shrink-0" // Added flex classes
               style={{
                 padding: "16px",
                 borderBottom: "1px solid #e5e7eb",
                 backgroundColor: "#f9fafb",
                 height: "56px", // Match top toolbar height
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0, // Prevent shrinking
               }}
             >
-              <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 600 }}>
+              <h3 className="m-0 text-base font-semibold">
+                {" "}
+                {/* Tailwind classes */}
                 Freenote Tools
               </h3>
             </div>
 
-            {/* Drawing Tools Content */}
+            {/* Drawing Tools Content (Scrollable) */}
             <div
-              style={{
-                padding: "16px",
-                display: "flex",
-                flexDirection: "column",
-                gap: "24px",
-                flexGrow: 1, // Allow this section to grow and push button down
-                overflowY: "auto", // Allow scrolling if tools exceed height
-              }}
+              className="flex-grow p-4 flex flex-col gap-6 overflow-y-auto" // Make scrollable
             >
               {/* Tool Selection Section */}
               <div className="tool-section">
-                <h4
-                  style={{
-                    margin: "0 0 12px 0",
-                    fontSize: "14px",
-                    fontWeight: 600,
-                    color: "#4b5563",
-                  }}
-                >
+                <h4 className="mt-0 mb-3 text-sm font-semibold text-gray-600">
+                  {" "}
+                  {/* Tailwind */}
                   Tool Selection
                 </h4>
-                <div style={{ display: "flex", gap: "8px" }}>
+                <div className="flex gap-2">
+                  {" "}
+                  {/* Tailwind */}
                   {/* Brush Button */}
                   <button
                     onClick={() => setTool("brush")}
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: "8px",
-                      padding: "12px",
-                      borderRadius: "6px",
-                      border:
-                        tool === "brush"
-                          ? "2px solid #3b82f6"
-                          : "1px solid #e5e7eb",
-                      backgroundColor: tool === "brush" ? "#eff6ff" : "#ffffff",
-                      cursor: "pointer",
-                      transition: "all 0.2s ease",
-                      outlineOffset: "2px",
-                    }}
+                    className={`flex-1 flex flex-col items-center gap-2 p-3 rounded-md border cursor-pointer transition-all duration-200 ease-in-out outline-offset-2 ${
+                      tool === "brush"
+                        ? "border-2 border-blue-500 bg-blue-50"
+                        : "border border-gray-200 bg-white hover:bg-gray-50"
+                    }`}
                     aria-pressed={tool === "brush"}
                     title="Select Brush Tool"
                   >
                     <Pencil
                       size={20}
-                      color={tool === "brush" ? "#3b82f6" : "#6b7280"}
+                      className={
+                        tool === "brush" ? "text-blue-600" : "text-gray-500"
+                      }
                     />
                     <span
-                      style={{
-                        fontSize: "14px",
-                        color: tool === "brush" ? "#3b82f6" : "#4b5563",
-                      }}
+                      className={`text-sm ${
+                        tool === "brush" ? "text-blue-600" : "text-gray-700"
+                      }`}
                     >
                       Brush
                     </span>
@@ -783,36 +856,24 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
                   {/* Eraser Button */}
                   <button
                     onClick={() => setTool("eraser")}
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: "8px",
-                      padding: "12px",
-                      borderRadius: "6px",
-                      border:
-                        tool === "eraser"
-                          ? "2px solid #3b82f6"
-                          : "1px solid #e5e7eb",
-                      backgroundColor:
-                        tool === "eraser" ? "#eff6ff" : "#ffffff",
-                      cursor: "pointer",
-                      transition: "all 0.2s ease",
-                      outlineOffset: "2px",
-                    }}
+                    className={`flex-1 flex flex-col items-center gap-2 p-3 rounded-md border cursor-pointer transition-all duration-200 ease-in-out outline-offset-2 ${
+                      tool === "eraser"
+                        ? "border-2 border-blue-500 bg-blue-50"
+                        : "border border-gray-200 bg-white hover:bg-gray-50"
+                    }`}
                     aria-pressed={tool === "eraser"}
                     title="Select Eraser Tool"
                   >
                     <Eraser
                       size={20}
-                      color={tool === "eraser" ? "#3b82f6" : "#6b7280"}
+                      className={
+                        tool === "eraser" ? "text-blue-600" : "text-gray-500"
+                      }
                     />
                     <span
-                      style={{
-                        fontSize: "14px",
-                        color: tool === "eraser" ? "#3b82f6" : "#4b5563",
-                      }}
+                      className={`text-sm ${
+                        tool === "eraser" ? "text-blue-600" : "text-gray-700"
+                      }`}
                     >
                       Eraser
                     </span>
@@ -821,43 +882,26 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
                   <button
                     onClick={() => {
                       setTool("select");
-                      // Focus the ReactQuill editor with a small delay to ensure it's ready
-                      setTimeout(() => {
-                        if (quillRef.current) {
-                          quillRef.current.focus();
-                        }
-                      }, 100);
+                      setTimeout(() => quillRef.current?.focus(), 100); // Focus quill
                     }}
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: "8px",
-                      padding: "12px",
-                      borderRadius: "6px",
-                      border:
-                        tool === "select"
-                          ? "2px solid #3b82f6"
-                          : "1px solid #e5e7eb",
-                      backgroundColor:
-                        tool === "select" ? "#eff6ff" : "#ffffff",
-                      cursor: "pointer",
-                      transition: "all 0.2s ease",
-                      outlineOffset: "2px",
-                    }}
+                    className={`flex-1 flex flex-col items-center gap-2 p-3 rounded-md border cursor-pointer transition-all duration-200 ease-in-out outline-offset-2 ${
+                      tool === "select"
+                        ? "border-2 border-blue-500 bg-blue-50"
+                        : "border border-gray-200 bg-white hover:bg-gray-50"
+                    }`}
                     aria-pressed={tool === "select"}
                     title="Select Text / Objects"
                   >
                     <Type
                       size={20}
-                      color={tool === "select" ? "#3b82f6" : "#6b7280"}
+                      className={
+                        tool === "select" ? "text-blue-600" : "text-gray-500"
+                      }
                     />
                     <span
-                      style={{
-                        fontSize: "14px",
-                        color: tool === "select" ? "#3b82f6" : "#4b5563",
-                      }}
+                      className={`text-sm ${
+                        tool === "select" ? "text-blue-600" : "text-gray-700"
+                      }`}
                     >
                       Text
                     </span>
@@ -868,38 +912,23 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
               {/* Color Selection (Only shown for Brush) */}
               {tool === "brush" && (
                 <div className="tool-section">
-                  <h4
-                    style={{
-                      margin: "0 0 12px 0",
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      color: "#4b5563",
-                    }}
-                  >
+                  <h4 className="mt-0 mb-3 text-sm font-semibold text-gray-600">
                     Color
                   </h4>
-                  <div
-                    style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}
-                  >
+                  <div className="flex flex-wrap gap-2">
+                    {" "}
+                    {/* Tailwind */}
                     {colorOptions.map((colorOption) => (
                       <button
                         key={colorOption}
                         onClick={() => setColor(colorOption)}
-                        style={{
-                          width: "36px",
-                          height: "36px",
-                          borderRadius: "50%",
-                          backgroundColor: colorOption,
-                          border:
-                            color === colorOption
-                              ? "2px solid #000" // Highlight selected color
-                              : "1px solid #d1d5db", // Subtle border for light colors
-                          cursor: "pointer",
-                          transition: "transform 0.1s ease",
-                          transform:
-                            color === colorOption ? "scale(1.1)" : "scale(1)",
-                          outline: "none",
-                        }}
+                        className={`w-9 h-9 rounded-full border cursor-pointer transition-transform duration-100 ease-in-out outline-none focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-400 ${
+                          // Added focus styles
+                          color === colorOption
+                            ? "border-2 border-black scale-110" // Highlight selected color
+                            : "border border-gray-300"
+                        }`}
+                        style={{ backgroundColor: colorOption }}
                         aria-label={`Select color ${colorOption}`}
                         title={colorOption}
                       />
@@ -907,24 +936,12 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
                     {/* Custom Color Button */}
                     <button
                       onClick={() => {
-                        // Trigger hidden color input
                         const input = document.getElementById(
                           "color-picker-input",
                         ) as HTMLInputElement;
-                        if (input) input.click();
+                        input?.click();
                       }}
-                      style={{
-                        width: "36px",
-                        height: "36px",
-                        borderRadius: "50%",
-                        backgroundColor: "#ffffff",
-                        border: "1px dashed #d1d5db",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        cursor: "pointer",
-                        color: "#6b7280",
-                      }}
+                      className="w-9 h-9 rounded-full border border-dashed border-gray-400 flex items-center justify-center cursor-pointer text-gray-500 hover:text-gray-700 hover:border-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-400" // Added hover/focus
                       aria-label="Choose custom color"
                       title="Custom color"
                     >
@@ -933,13 +950,8 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
                       <input
                         id="color-picker-input"
                         type="color"
-                        value={color}
-                        style={{
-                          visibility: "hidden",
-                          width: 0,
-                          height: 0,
-                          position: "absolute",
-                        }}
+                        value={color} // Controlled input
+                        className="invisible w-0 h-0 absolute" // Tailwind for hiding
                         onChange={(e) => setColor(e.target.value)}
                       />
                     </button>
@@ -950,43 +962,24 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
               {/* Brush Size (Only shown for Brush) */}
               {tool === "brush" && (
                 <div className="tool-section">
-                  <h4
-                    style={{
-                      margin: "0 0 12px 0",
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      color: "#4b5563",
-                    }}
-                  >
+                  <h4 className="mt-0 mb-3 text-sm font-semibold text-gray-600">
                     Brush Size
                   </h4>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "12px",
-                    }}
-                  >
+                  <div className="flex items-center gap-3">
+                    {" "}
+                    {/* Tailwind */}
+                    {/* Decrease Button */}
                     <button
                       onClick={() =>
                         setStrokeWidth(Math.max(1, strokeWidth - 1))
                       }
-                      style={{
-                        width: "32px",
-                        height: "32px",
-                        borderRadius: "4px",
-                        border: "1px solid #e5e7eb",
-                        backgroundColor: "#f9fafb",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        cursor: "pointer",
-                      }}
+                      className="w-8 h-8 rounded border border-gray-200 bg-gray-50 flex items-center justify-center cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-blue-400" // Added focus/disabled styles
                       disabled={strokeWidth <= 1}
                       aria-label="Decrease brush size"
                     >
                       <Minus size={16} />
                     </button>
+                    {/* Slider */}
                     <input
                       type="range"
                       min="1"
@@ -995,62 +988,38 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
                       onChange={(e) =>
                         setStrokeWidth(Number.parseInt(e.target.value))
                       }
-                      style={{
-                        flexGrow: 1,
-                        cursor: "pointer",
-                        accentColor: color,
-                      }}
+                      className="flex-grow cursor-pointer h-2 bg-gray-200 rounded-lg appearance-none accent-blue-500" // Styled slider
+                      style={{ accentColor: color }} // Use current color for thumb
                       aria-label="Brush size slider"
                     />
+                    {/* Increase Button */}
                     <button
                       onClick={() =>
                         setStrokeWidth(Math.min(20, strokeWidth + 1))
                       }
-                      style={{
-                        width: "32px",
-                        height: "32px",
-                        borderRadius: "4px",
-                        border: "1px solid #e5e7eb",
-                        backgroundColor: "#f9fafb",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        cursor: "pointer",
-                      }}
+                      className="w-8 h-8 rounded border border-gray-200 bg-gray-50 flex items-center justify-center cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-blue-400" // Added focus/disabled styles
                       disabled={strokeWidth >= 20}
                       aria-label="Increase brush size"
                     >
                       <Plus size={16} />
                     </button>
                   </div>
-                  <div
-                    style={{
-                      textAlign: "center",
-                      marginTop: "8px",
-                      fontSize: "14px",
-                      color: "#6b7280",
-                    }}
-                  >
+                  {/* Size Label */}
+                  <div className="text-center mt-2 text-sm text-gray-600">
                     {strokeWidth}px
                   </div>
                   {/* Preview circle */}
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "center",
-                      marginTop: "8px",
-                      height: "30px",
-                      alignItems: "center",
-                    }}
-                  >
+                  <div className="flex justify-center mt-2 h-8 items-center">
+                    {" "}
+                    {/* Fixed height */}
                     <div
                       style={{
                         width: `${strokeWidth}px`,
                         height: `${strokeWidth}px`,
+                        minWidth: "2px", // Ensure visibility for small sizes
+                        minHeight: "2px",
                         borderRadius: "50%",
                         backgroundColor: color,
-                        minWidth: "2px",
-                        minHeight: "2px",
                         transition: "width 0.1s ease, height 0.1s ease",
                       }}
                       aria-hidden="true"
@@ -1061,85 +1030,48 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
 
               {/* Pages Section */}
               <div className="tool-section">
-                <h4
-                  style={{
-                    margin: "0 0 12px 0",
-                    fontSize: "14px",
-                    fontWeight: 600,
-                    color: "#4b5563",
-                  }}
-                >
+                <h4 className="mt-0 mb-3 text-sm font-semibold text-gray-600">
                   Pages
                 </h4>
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "8px",
-                  }}
-                >
+                <div className="flex flex-col gap-2">
+                  {" "}
+                  {/* Tailwind */}
                   {/* List of pages */}
-                  <div
-                    style={{
-                      maxHeight: "200px",
-                      overflowY: "auto",
-                      border: "1px solid #e5e7eb",
-                      borderRadius: "6px",
-                    }}
-                  >
+                  <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-md">
+                    {" "}
+                    {/* Tailwind */}
                     {(pages || []).map((page, index) => (
                       <button
                         key={page.id || index}
                         onClick={() => setCurrentPageIndex(index)}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          width: "100%",
-                          padding: "8px 12px",
-                          backgroundColor:
-                            currentPageIndex === index
-                              ? "#eff6ff"
-                              : "transparent",
-                          border: "none",
-                          borderBottom:
-                            index < (pages || []).length - 1
-                              ? "1px solid #e5e7eb"
-                              : "none",
-                          textAlign: "left",
-                          cursor: "pointer",
-                        }}
+                        className={`flex items-center w-full px-3 py-2 text-left cursor-pointer ${
+                          // Tailwind
+                          currentPageIndex === index
+                            ? "bg-blue-50"
+                            : "bg-transparent hover:bg-gray-50"
+                        } ${
+                          index < (pages || []).length - 1
+                            ? "border-b border-gray-200"
+                            : ""
+                        }`}
                       >
                         <span
-                          style={{
-                            fontSize: "14px",
-                            fontWeight: currentPageIndex === index ? 500 : 400,
-                            color:
-                              currentPageIndex === index
-                                ? "#3b82f6"
-                                : "#4b5563",
-                          }}
+                          className={`text-sm ${
+                            // Tailwind
+                            currentPageIndex === index
+                              ? "font-medium text-blue-600"
+                              : "font-normal text-gray-700"
+                          }`}
                         >
                           Page {index + 1}
                         </span>
                       </button>
                     ))}
                   </div>
-
                   {/* Add new page button */}
                   <button
                     onClick={addNewPage}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: "8px",
-                      padding: "8px 0",
-                      backgroundColor: "#f3f4f6",
-                      border: "1px solid #e5e7eb",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      fontSize: "14px",
-                    }}
+                    className="flex items-center justify-center gap-2 py-2 bg-gray-100 border border-gray-200 rounded-md cursor-pointer text-sm hover:bg-gray-200" // Tailwind
                   >
                     <FilePlus size={16} />
                     Add New Page
@@ -1147,28 +1079,16 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
                 </div>
               </div>
 
+              {/* Spacer to push clear button down */}
+              <div className="flex-grow"></div>
+
               {/* Clear Drawings Button */}
               <button
                 onClick={handleClearDrawing}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "8px",
-                  padding: "10px 16px",
-                  marginTop: "auto",
-                  backgroundColor: "#fee2e2",
-                  color: "#b91c1c",
-                  border: "1px solid #fecaca",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  transition: "all 0.2s ease",
-                  fontWeight: 500,
-                  width: "100%",
-                }}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 mt-4 bg-red-50 text-red-700 border border-red-200 rounded-md cursor-pointer transition-colors duration-200 ease-in-out hover:bg-red-100 hover:border-red-300 font-medium w-full flex-shrink-0" // Tailwind + flex-shrink-0
               >
                 <Trash2 size={16} />
-                Clear Current Page
+                Clear Current Page Drawings
               </button>
             </div>
           </div>
@@ -1178,18 +1098,39 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
   },
 );
 
-// Helper function for debouncing
-
+// Helper function for debouncing (consider adding a .flush() method if needed)
 function debounce<T extends (...args: any[]) => any>(
   fn: T,
   delay: number,
 ): (...args: Parameters<T>) => void {
-  let timeoutId: NodeJS.Timeout;
+  let timeoutId: NodeJS.Timeout | null = null;
 
-  return function (this: ThisParameterType<T>, ...args: Parameters<T>): void {
-    clearTimeout(timeoutId);
+  const debouncedFn = function (
+    this: ThisParameterType<T>,
+    ...args: Parameters<T>
+  ): void {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
     timeoutId = setTimeout(() => {
       fn.apply(this, args);
+      timeoutId = null; // Clear timeoutId after execution
     }, delay);
   };
+
+  // Add a flush method if needed for imperative saving
+  // debouncedFn.flush = () => {
+  //   if (timeoutId) {
+  //     clearTimeout(timeoutId);
+  //     // How to get the last arguments? Might need to store them.
+  //     // Or just call the original function with the *current* state.
+  //     // fn.apply(this, lastArgs); // Requires storing lastArgs
+  //     timeoutId = null;
+  //   }
+  // };
+
+  return debouncedFn;
 }
+
+// Add displayName for better debugging
+RichSketchpadImpl.displayName = "RichSketchpadImpl";

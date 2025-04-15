@@ -41,3 +41,6 @@ yarn-error.log*
 llm.md
 llm.txt
 roadmap.txt
+
+# LangGraph API
+.langgraph_api

@@ -21,6 +21,8 @@ export const NoteDisplay = forwardRef<any, NoteDisplayProps>(
     const notebookRef = useRef<any>(null);
     const freenoteRef = useRef<any>(null);
 
+    console.log(note);
+
     // Example initial data and change handler (replace with your actual logic)
     const [sketchData, setSketchData] = useState<RichSketchpadData | undefined>(
       undefined,
@@ -72,13 +74,16 @@ export const NoteDisplay = forwardRef<any, NoteDisplayProps>(
     useImperativeHandle(ref, () => ({
       notebookRef,
       getHTML: () => {
+        console.log(type);
         // Ensure it's the notebook type and the ref is populated
-        if (type === "notebook" && notebookRef.current) {
+        if (type == "notebook" && notebookRef.current) {
           // Call the getContent method exposed by Tiptap's useImperativeHandle
           console.log(notebookRef.current.getContent());
+          return notebookRef.current.getContent();
         }
         if (type == "freenote" && freenoteRef.current) {
           console.log(freenoteRef.current.getContent());
+          return freenoteRef.current.getContent();
         }
         // Handle cases where it's not a notebook or not ready
         else {

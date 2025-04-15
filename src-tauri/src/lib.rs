@@ -2,6 +2,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod fs;
+mod qdrant;
+mod ollama;
+
 
 // Re-export the functions from the fs module
 use fs::{

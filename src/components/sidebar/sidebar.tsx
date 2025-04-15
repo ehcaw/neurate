@@ -1,245 +1,229 @@
-"use client";
-
-import React from "react";
-import { useMemo, useState, useCallback, useRef, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  FileText,
-  Folder,
-  FolderOpen,
-  History,
-  Plus,
-  Search,
-  Settings,
-  Star,
-  X,
-} from "lucide-react";
-import { Note } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { KeyboardHelp } from "@/components/keyboard-help";
+import { useState, useCallback, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   ContextMenu,
+  ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
-  ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { SidebarSection } from "./sidebar-section";
+import { Folder, FolderOpen, ChevronDown, Plus, PanelLeft } from "lucide-react";
+import {
+  cn,
+  refreshNotesTree,
+  refreshRecentNotes,
+  refreshNotes,
+} from "@/lib/utils";
 import { NoteTreeItem } from "./note-tree-item";
-import { useHotkeys, useHotkeysWithCallback } from "@/hooks/use-hotkeys";
-import { invoke } from "@tauri-apps/api/core";
+import { Button } from "@/components/ui/button";
+import { notesStore } from "@/lib/context";
 import {
   DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
   DropdownMenuItem,
+  DropdownMenuTrigger,
   DropdownMenuShortcut,
+  DropdownMenuContent,
 } from "../ui/dropdown-menu";
 
-// Extended Note type with additional properties
-interface ExtendedNote extends Note {
-  path?: string[];
-  isModified?: boolean;
-  lastModified?: Date;
-  isPinned?: boolean;
-}
-
+// Define props for the sidebar
 interface SidebarProps {
-  notes: Note[];
   activeNoteId: string | null;
   setActiveNoteId: (id: string) => void;
-  createNote: (note_type: string) => void;
-  deleteNote: (id: string) => void;
+  createNote: (noteType: string) => Promise<void>;
+  deleteNote: (path: string) => Promise<void>;
   isOpen: boolean;
   setIsOpen: (isOpen: boolean) => void;
 }
 
-export function Sidebar({
-  notes,
+export const Sidebar: React.FC<SidebarProps> = ({
   activeNoteId,
   setActiveNoteId,
   createNote,
   deleteNote,
   isOpen,
   setIsOpen,
-}: SidebarProps) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [activeView, setActiveView] = useState<"explorer" | "search">(
-    "explorer",
-  );
+}) => {
+  // State management
+  //const [notesTree, setNotesTree] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
-    new Set(["root"]),
+    new Set(),
   );
-  const searchInputRef = useRef<HTMLInputElement>(null);
+  //const [recentNotes, setRecentNotes] = useState<Note[]>([]);
 
-  // Convert flat notes to tree structure
-  const [notesTree, setNotesTree] = useState<any>({ root: { children: {} } });
+  const { notesTree, recentNotes, setNotesTree, setRecentNotes, setNotes } =
+    notesStore();
 
-  // Fetch the notes tree from the Rust backend
-  const fetchNotesTree = useCallback(async () => {
-    try {
-      // Call the Rust function to get the organized notes tree structure
-      const treeData = await invoke("get_notes_tree");
-      setNotesTree(treeData);
-    } catch (error) {
-      console.error("Failed to fetch notes tree:", error);
-    }
+  // Toggle folder expansion
+  const toggleFolder = useCallback((folderPath: string) => {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderPath)) {
+        next.delete(folderPath);
+      } else {
+        next.add(folderPath);
+      }
+      return next;
+    });
   }, []);
 
-  // Load the notes tree when the component mounts or when notes change
-  useEffect(() => {
-    fetchNotesTree();
-  }, [fetchNotesTree, notes]); // Re-fetch when notes change
-
-  // Get recently modified notes
-  const recentNotes = useMemo(() => {
-    const extendedNotes = notes.map((note) => ({
-      ...note,
-      lastModified: new Date(Date.now() - Math.random() * 10000000000),
-    }));
-
-    return [...extendedNotes]
-      .sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())
-      .slice(0, 5);
-  }, [notes]);
-
-  // Get pinned/favorite notes
-  const pinnedNotes = useMemo(() => {
-    // For demo, let's pin some notes
-    return notes.filter((_, index) => index % 9 === 0);
-  }, [notes]);
-
-  // Filtered notes for search
-  const filteredNotes = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-
-    const query = searchQuery.toLowerCase();
-    return notes.filter(
-      (note) =>
-        note.title.toLowerCase().includes(query) ||
-        note.pages[0].content.toLowerCase().includes(query),
-    );
-  }, [notes, searchQuery]);
-
-  // Handle keyboard navigation
-  useHotkeysWithCallback("ctrl+p", () => {
-    setActiveView("search");
-    searchInputRef.current?.focus();
-  });
-
-  useHotkeysWithCallback("escape", () => {
-    if (activeView === "search" && searchQuery) {
-      setSearchQuery("");
-    } else if (activeView === "search") {
-      setActiveView("explorer");
-    }
-  });
-
-  // Handlers
+  // Handle note click
   const handleNoteClick = useCallback(
-    (id: string) => {
-      console.log(`handleNoteClick called with id: ${id}`);
-      console.log(`Current activeNoteId: ${activeNoteId}`);
-      setActiveNoteId(id);
+    (noteId: string) => {
+      setActiveNoteId(noteId);
     },
-    [setActiveNoteId, activeNoteId],
+    [setActiveNoteId],
   );
 
+  // Handle note deletion
   const handleDeleteClick = useCallback(
-    (e: React.MouseEvent, id: string) => {
-      e.stopPropagation();
-      deleteNote(id);
+    async (e: React.MouseEvent | null, noteId: string) => {
+      if (e) e.stopPropagation();
+      deleteNote(noteId);
+      setNotes(await refreshNotes());
+      setRecentNotes(await refreshRecentNotes());
+      setNotesTree(await refreshNotesTree());
     },
     [deleteNote],
   );
 
-  const handleSearchChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      setSearchQuery(e.target.value);
-      if (e.target.value) {
-        setActiveView("search");
-      }
-    },
-    [],
-  );
-
-  const handleClearSearch = useCallback(() => {
-    setSearchQuery("");
-    setActiveView("explorer");
+  // Handle note pinning
+  const handlePinNote = useCallback((noteId: string) => {
+    // Add your pinning logic here
+    console.log("Pin note:", noteId);
   }, []);
 
-  const toggleFolder = useCallback((folderPath: string) => {
-    setExpandedFolders((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(folderPath)) {
-        newSet.delete(folderPath);
-      } else {
-        newSet.add(folderPath);
-      }
-      return newSet;
-    });
-  }, []);
-
+  // Handle folder creation
   const handleCreateFolder = useCallback(() => {
-    // This would be implemented with your Rust backend
+    // Implement folder creation logic
     console.log("Create folder");
   }, []);
 
-  const handlePinNote = useCallback((id: string) => {
-    // This would be implemented with your Rust backend
-    console.log("Pin note", id);
+  // Fetch the notes tree from the Rust backend
+  const fetchNotesTree = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      // Call the Rust function to get the organized notes tree structure
+      setNotesTree(await refreshNotesTree());
+
+      // Also fetch recent notes from gather_notes
+      setRecentNotes(await refreshRecentNotes());
+
+      setIsLoading(false);
+    } catch (err) {
+      console.error("Failed to fetch notes tree:", err);
+      setError(typeof err === "string" ? err : "Failed to fetch notes");
+      setIsLoading(false);
+    }
   }, []);
 
-  // Helper function to build tree structure
-  function buildNoteTree(notes: ExtendedNote[]) {
-    const tree: any = { root: { children: {} } };
+  // Render tree function
+  const renderTree = useCallback(
+    (nodes: any, parentPath: string[] = []) => {
+      if (!nodes) return null;
 
-    // First pass: create folder structure
-    notes.forEach((note) => {
-      let currentLevel = tree.root.children;
+      // If nodes is an array (from backend), render the array items
+      if (Array.isArray(nodes)) {
+        return nodes.map((node) => {
+          const pathString = node.path;
 
-      if (note.path && note.path.length > 0) {
-        for (const folder of note.path) {
-          if (!currentLevel[folder]) {
-            currentLevel[folder] = {
-              type: "folder",
-              name: folder,
-              children: {},
-            };
+          if (node.is_directory) {
+            const isExpanded = expandedFolders.has(pathString);
+
+            return (
+              <div key={pathString}>
+                <ContextMenu>
+                  <ContextMenuTrigger>
+                    <div
+                      className={cn(
+                        "flex items-center gap-1 py-1 px-2 text-sm rounded-md cursor-pointer",
+                        "hover:bg-muted",
+                      )}
+                      onClick={() => toggleFolder(pathString)}
+                    >
+                      <div className="w-4 h-4 flex-shrink-0">
+                        {isExpanded ? (
+                          <FolderOpen className="h-4 w-4 text-yellow-500" />
+                        ) : (
+                          <Folder className="h-4 w-4 text-yellow-500" />
+                        )}
+                      </div>
+                      <span className="truncate">{node.name}</span>
+                      <ChevronDown
+                        className={cn(
+                          "ml-auto h-4 w-4 transition-transform",
+                          isExpanded
+                            ? "transform rotate-0"
+                            : "transform rotate-[-90deg]",
+                        )}
+                      />
+                    </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem onSelect={() => createNote("notebook")}>
+                      New Note
+                    </ContextMenuItem>
+                    <ContextMenuItem onSelect={handleCreateFolder}>
+                      New Folder
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem>Rename</ContextMenuItem>
+                    <ContextMenuItem className="text-red-500">
+                      Delete
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
+
+                {isExpanded && node.children && (
+                  <div className="ml-3 pl-2 border-l border-border">
+                    {renderTree(node.children)}
+                  </div>
+                )}
+              </div>
+            );
+          } else {
+            // Process JSON files as notes
+            if (node.path.endsWith(".json")) {
+              // Extract note ID (path) and title
+              const noteId = node.path;
+              const noteTitle = node.name.endsWith(".json")
+                ? node.name.slice(0, -5)
+                : node.name;
+
+              return (
+                <NoteTreeItem
+                  key={noteId}
+                  note={{
+                    id: noteId,
+                    title: noteTitle,
+                    isModified: false, // Use your state management here
+                    isPinned: false, // Use your state management here
+                  }}
+                  isActive={activeNoteId === noteId}
+                  onClick={() => {
+                    console.log("Clicking note with ID:", noteId);
+                    handleNoteClick(noteId);
+                  }}
+                  onDelete={(e) => handleDeleteClick(e, noteId)}
+                  onPin={() => handlePinNote(noteId)}
+                />
+              );
+            }
+            return null; // Skip non-JSON files
           }
-          currentLevel = currentLevel[folder].children;
-        }
+        });
       }
 
-      // Add the note to the current level
-      currentLevel[note.id] = {
-        type: "note",
-        id: note.id,
-        title: note.title || "Untitled",
-        isModified: note.isModified,
-        isPinned: note.isPinned,
-      };
-    });
-
-    return tree;
-  }
-
-  // render tree recursively
-  const renderTree = useCallback(
-    (node: any, path: string[] = []) => {
-      if (!node) return null;
-
-      const entries = Object.entries(node);
+      // Maintain backwards compatibility with existing code structure
+      // if someone passes an object instead of array
+      const entries = Object.entries(nodes);
       if (entries.length === 0) return null;
 
       return entries.map(([key, value]: [string, any]) => {
-        const currentPath = [...path, key];
+        // Use the provided parentPath to build the current path
+        const currentPath = [...parentPath, key];
         const pathString = currentPath.join("/");
 
         if (value.type === "folder") {
@@ -299,9 +283,9 @@ export function Sidebar({
         } else if (value.type === "note") {
           return (
             <NoteTreeItem
-              key={value.id} // Use the clean ID
+              key={value.id}
               note={{
-                id: value.id, // Use the clean ID, not the fileId
+                id: value.id,
                 title: value.title || "Untitled",
                 isModified: value.isModified || false,
                 isPinned: value.isPinned || false,
@@ -328,232 +312,111 @@ export function Sidebar({
       createNote,
       handleCreateFolder,
       handlePinNote,
+      toggleFolder,
     ],
   );
 
+  // Load notes on component mount
+  useEffect(() => {
+    fetchNotesTree();
+  }, [fetchNotesTree]);
+
+  // When activeNoteId changes, refresh recent notes
+  useEffect(() => {
+    if (activeNoteId) {
+      // Optional: Update recent notes when active note changes
+    }
+  }, [activeNoteId]);
+
+  // Toggle sidebar function
+  const toggleSidebar = () => {
+    setIsOpen(!isOpen);
+  };
+
+  // If sidebar is collapsed, show only the toggle button
+  if (!isOpen) {
+    return (
+      <div className="border-r border-border p-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={toggleSidebar}
+          className="mb-2"
+        >
+          <PanelLeft className="h-4 w-4" />
+        </Button>
+      </div>
+    );
+  }
+
   return (
-    <>
-      <div
-        className={cn(
-          "h-full border-r border-border bg-background transition-all duration-300 ease-in-out",
-          isOpen ? "w-72" : "w-0",
-        )}
-        data-sidebar
-        tabIndex={0}
-      >
-        {isOpen && (
-          <div className="flex flex-col h-full">
-            <div className="flex items-center justify-between p-3 border-b">
-              <h2 className="font-semibold truncate">Notes ({notes.length})</h2>
-              <div className="flex items-center gap-1">
-                <KeyboardHelp />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setIsOpen(false)}
-                  title="Hide sidebar"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-
-            <div className="p-2 border-b">
-              <div className="relative">
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search notes... (Ctrl+P)"
-                  value={searchQuery}
-                  onChange={handleSearchChange}
-                  className="pl-8 h-9"
-                  ref={searchInputRef}
-                />
-                {searchQuery && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="absolute right-1 top-1 h-7 w-7"
-                    onClick={handleClearSearch}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            <div className="border-b">
-              <Tabs
-                defaultValue="explorer"
-                value={activeView}
-                onValueChange={(value) =>
-                  setActiveView(value as "explorer" | "search")
-                }
-                className="w-full"
-              >
-                <TabsList className="w-full grid grid-cols-2">
-                  <TabsTrigger value="explorer">Explorer</TabsTrigger>
-                  <TabsTrigger value="search">Search</TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </div>
-
-            <ScrollArea className="flex-1">
-              {activeView === "explorer" ? (
-                <div className="p-1">
-                  <div className="flex items-center justify-between p-2">
-                    <span className="text-xs font-medium text-muted-foreground">
-                      EXPLORER
-                    </span>
-                    <div className="flex gap-1">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger>
-                          <Plus className="h-3.5 w-3.5" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent className="w-full">
-                          <DropdownMenuItem
-                            onClick={() => createNote("notebook")}
-                          >
-                            Notebook
-                            <DropdownMenuShortcut className="text-xs text-gray-500">
-                              Block based note taking
-                            </DropdownMenuShortcut>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => createNote("freenote")}
-                          >
-                            Free-note
-                            <DropdownMenuShortcut className="text-xs text-gray-500">
-                              Flexible canvas with layers
-                            </DropdownMenuShortcut>
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        onClick={handleCreateFolder}
-                        title="New folder"
-                      >
-                        <Folder className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Pinned Notes Section */}
-                  {pinnedNotes.length > 0 && (
-                    <SidebarSection
-                      title="FAVORITES"
-                      icon={<Star className="h-3.5 w-3.5" />}
-                    >
-                      {pinnedNotes.map((note) => (
-                        <NoteTreeItem
-                          key={note.id}
-                          note={{
-                            id: note.id,
-                            title: note.title,
-                            isPinned: true,
-                          }}
-                          isActive={activeNoteId === note.id}
-                          onClick={() => handleNoteClick(note.id)}
-                          onDelete={(e) => handleDeleteClick(e, note.id)}
-                          onPin={() => handlePinNote(note.id)}
-                        />
-                      ))}
-                    </SidebarSection>
-                  )}
-
-                  {/* Recent Notes Section */}
-                  <SidebarSection
-                    title="RECENT"
-                    icon={<History className="h-3.5 w-3.5" />}
-                  >
-                    {recentNotes.map((note) => (
-                      <NoteTreeItem
-                        key={note.id}
-                        note={{
-                          id: note.id,
-                          title: note.title,
-                          lastModified: note.lastModified,
-                        }}
-                        isActive={activeNoteId === note.id}
-                        onClick={() => handleNoteClick(note.id)}
-                        onDelete={(e) => handleDeleteClick(e, note.id)}
-                        onPin={() => handlePinNote(note.id)}
-                      />
-                    ))}
-                  </SidebarSection>
-
-                  {/* File Tree */}
-                  <SidebarSection
-                    title="FILES"
-                    icon={<FileText className="h-3.5 w-3.5" />}
-                    defaultOpen
-                  >
-                    <React.Fragment key="file-tree-content">
-                      {renderTree(notesTree.root.children)}
-                    </React.Fragment>
-                  </SidebarSection>
-                </div>
-              ) : (
-                <div className="p-2 space-y-1">
-                  {filteredNotes.length > 0 ? (
-                    <>
-                      <div className="text-xs font-medium text-muted-foreground p-2">
-                        SEARCH RESULTS ({filteredNotes.length})
-                      </div>
-                      {filteredNotes.map((note) => (
-                        <NoteTreeItem
-                          key={note.id}
-                          note={{
-                            id: note.id,
-                            title: note.title,
-                          }}
-                          isActive={activeNoteId === note.id}
-                          onClick={() => handleNoteClick(note.id)}
-                          onDelete={(e) => handleDeleteClick(e, note.id)}
-                          onPin={() => handlePinNote(note.id)}
-                          highlightText={searchQuery}
-                        />
-                      ))}
-                    </>
-                  ) : searchQuery ? (
-                    <div className="px-2 py-4 text-center text-sm text-muted-foreground">
-                      No notes found
-                    </div>
-                  ) : (
-                    <div className="px-2 py-4 text-center text-sm text-muted-foreground">
-                      Type to search
-                    </div>
-                  )}
-                </div>
-              )}
-            </ScrollArea>
-
-            <div className="border-t p-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start text-muted-foreground"
-              >
-                <Settings className="mr-2 h-4 w-4" />
-                Settings
-              </Button>
-            </div>
-          </div>
-        )}
+    <div
+      className="h-full w-64 border-r border-border overflow-y-auto"
+      data-sidebar
+    >
+      {/* Sidebar Header with Toggle and Create Button */}
+      <div className="flex items-center justify-between p-2 border-b border-border">
+        <Button variant="ghost" size="icon" onClick={toggleSidebar}>
+          <PanelLeft className="h-4 w-4" />
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md text-sm font-medium px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90">
+            <Plus className="h-4 w-4 mr-2" /> Create New Note
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="w-56">
+            <DropdownMenuItem onClick={() => createNote("notebook")}>
+              Notebook
+              <DropdownMenuShortcut className="text-xs text-gray-500">
+                Block based note taking
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => createNote("freenote")}>
+              Free-note
+              <DropdownMenuShortcut className="text-xs text-gray-500">
+                Flexible canvas with layers
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      {!isOpen && (
-        <Button
-          variant="outline"
-          size="icon"
-          className="absolute left-4 top-4 z-10"
-          onClick={() => setIsOpen(true)}
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-      )}
-    </>
+      {/* Recent Notes Section */}
+      <div className="p-2">
+        <h3 className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">
+          Recent
+        </h3>
+        <div className="space-y-1">
+          {recentNotes.map((note) => (
+            <div
+              key={note.id}
+              className={cn(
+                "text-sm py-1 px-2 rounded-md cursor-pointer truncate",
+                activeNoteId === note.id
+                  ? "bg-accent text-accent-foreground"
+                  : "hover:bg-muted",
+              )}
+              onClick={() => handleNoteClick(note.id)}
+            >
+              {note.title}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* All Notes Section with Tree View */}
+      <div className="p-2">
+        <h3 className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">
+          Files
+        </h3>
+
+        {isLoading ? (
+          <div className="flex justify-center p-4">Loading notes...</div>
+        ) : error ? (
+          <div className="text-red-500 p-4">{error}</div>
+        ) : (
+          renderTree(notesTree)
+        )}
+      </div>
+    </div>
   );
-}
+};

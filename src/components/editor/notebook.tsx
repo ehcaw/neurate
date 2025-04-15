@@ -28,6 +28,13 @@ import SlashCommands from "../custom-notebook-node/command-list";
 import NodeWrapper from "../custom-notebook-node/node-wrapper";
 import SketchPadImpl from "../custom-notebook-node/sketch";
 import { invoke } from "@tauri-apps/api/core";
+import { flushSync } from "react-dom";
+import { notesStore } from "@/lib/context";
+import {
+  refreshNotes,
+  refreshNotesTree,
+  refreshRecentNotes,
+} from "@/lib/utils";
 
 interface TiptapProps {
   note: Note;
@@ -37,6 +44,8 @@ interface TiptapProps {
 export const Tiptap = forwardRef<any, TiptapProps>(
   ({ note, updateNote }, ref) => {
     const [localTitle, setLocalTitle] = useState(note.title || "");
+    const { setNotes, setRecentNotes, setNotesTree } = notesStore();
+
     const editor = useEditor({
       extensions: [
         StarterKit,
@@ -77,10 +86,14 @@ export const Tiptap = forwardRef<any, TiptapProps>(
       // Add more methods as needed
     }));
 
-    // Update editor content when note changes
     useEffect(() => {
       if (editor && note.pages[0].content !== editor.getHTML()) {
-        editor.commands.setContent(note.pages[0].content);
+        // Use requestAnimationFrame to schedule after current render
+        requestAnimationFrame(() => {
+          flushSync(() => {
+            editor.commands.setContent(note.pages[0].content);
+          });
+        });
       }
     }, [editor, note.id, note.pages[0].content]);
 
@@ -165,20 +178,26 @@ export const Tiptap = forwardRef<any, TiptapProps>(
             onChange={(e) => {
               setLocalTitle(e.target.value);
             }}
-            onKeyDown={(e) => {
+            onKeyDown={async (e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
                 updateNote(note.id, { title: localTitle });
                 console.log(note.id);
                 invoke("update_title", { path: note.id, newTitle: localTitle });
                 e.currentTarget.blur();
+                setNotes(await refreshNotes());
+                setRecentNotes(await refreshRecentNotes());
+                setNotesTree(await refreshNotesTree());
               }
             }}
-            onBlur={(e) => {
+            onBlur={async (e) => {
               // Also update when the input loses focus (user clicks elsewhere)
               if (localTitle !== note.title) {
                 updateNote(note.id, { title: localTitle });
                 invoke("update_title", { path: note.id, newTitle: localTitle });
+                setNotes(await refreshNotes());
+                setRecentNotes(await refreshRecentNotes());
+                setNotesTree(await refreshNotesTree());
               }
             }}
             placeholder="Untitled"

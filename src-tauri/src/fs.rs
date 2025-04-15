@@ -2,7 +2,7 @@ use array_list::ArrayList;
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{from_str, json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{self, Error as IoError};
@@ -48,8 +48,8 @@ pub struct Note {
   pub pages: Vec<PageContent>,
 }
 
-fn get_app_data_dir() -> Result<PathBuf, String> {
-  if let Some(proj_dirs) = ProjectDirs::from("com", "ehcaw", "jot") {
+pub fn get_app_data_dir() -> Result<PathBuf, String> {
+  if let Some(proj_dirs) = ProjectDirs::from("com", "ehcaw", "neurate") {
     // Get the data directory path
     let data_dir = proj_dirs.data_dir();
 
@@ -59,6 +59,17 @@ fn get_app_data_dir() -> Result<PathBuf, String> {
     Ok(data_dir.to_path_buf())
   } else {
     Err("Could not determine app data directory".to_string())
+  }
+}
+
+pub fn get_app_notes_dir() -> Result<PathBuf, String> {
+  if let Some(proj_dirs) = ProjectDirs::from("com", "ehcaw", "neurate") {
+    let data_dir = proj_dirs.data_dir();
+    fs::create_dir_all(data_dir).map_err(|e| format!("Failed to create data directory: {} ", e))?;
+    let app_dir = data_dir.join("/notes");
+    Ok(app_dir)
+  } else {
+    Err("Could not determine app notes directory".to_string())
   }
 }
 
@@ -163,21 +174,6 @@ pub fn calculate_directory_size(path: &str) -> Result<u64, String> {
   Ok(total_size)
 }
 
-#[tauri::command]
-pub fn save_note(path: &str, note: &str) -> Result<(), String> {
-  // Parse the note string to JSON
-
-  let json: Value = serde_json::from_str(note).map_err(|e| e.to_string())?;
-
-  // Convert JSON back to a formatted string
-  let json_string = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
-
-  // Write to file
-  fs::write(path, json_string).map_err(|e| e.to_string())?;
-
-  Ok(())
-}
-
 pub fn add_page(note: &mut Note, content: String, drawings: Vec<DrawingData>) {
   let now = Utc::now();
   let page = PageContent {
@@ -227,8 +223,8 @@ pub fn create_new_note(title: &str, note_type: &str) -> Result<String, String> {
         },
         "pages": [{
           "id": Uuid::new_v4().to_string(),
-          "text_layer":  "",
-          "drawing_layer": "",
+          "lines": "[]",
+          "content": "[]",
           "last_modified": now
         }]
     });
@@ -372,13 +368,74 @@ pub fn get_notes_tree() -> Result<Value, String> {
   Ok(tree)
 }
 
-fn build_notes_tree(root_path: &str) -> Result<Value, String> {
-  let mut tree = json!({ "root": { "children": {} } });
-  let root = Path::new(root_path);
+fn build_notes_tree(dir_path_str: &str) -> Result<Value, String> {
+  let dir_path = Path::new(dir_path_str);
+  let mut entries = Vec::new();
 
-  process_directory(&root, &mut tree["root"]["children"], root_path)?;
+  if !dir_path.is_dir() {
+    return Ok(json!([])); // Return empty array if not a directory or doesn't exist
+  }
 
-  Ok(tree)
+  for entry_result in fs::read_dir(dir_path)
+    .map_err(|e| format!("Failed to read directory '{}': {}", dir_path.display(), e))?
+  {
+    let entry = entry_result.map_err(|e| {
+      format!(
+        "Failed to process directory entry in '{}': {}",
+        dir_path.display(),
+        e
+      )
+    })?;
+    let path = entry.path(); // entry.path() SHOULD give an absolute path if dir_path was absolute
+
+    // --- Ensure you use the absolute path here ---
+    let absolute_path_str = path
+      .to_str()
+      .ok_or_else(|| format!("Invalid path encoding for {}", path.display()))?
+      .to_string();
+    // ----------------------------------------------
+
+    let metadata = fs::metadata(&path)
+      .map_err(|e| format!("Failed to get metadata for '{}': {}", path.display(), e))?;
+    let content = fs::read_to_string(path.clone()).unwrap();
+    let parsed_json: Value =
+      serde_json::from_str(&content).map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
+    // Extract the title as a string
+    let file_name = parsed_json["title"]
+      .as_str()
+      .ok_or_else(|| "Title field missing or not a string".to_string())?;
+
+    let mut node = json!({
+        "id": absolute_path_str, // Use absolute path as ID or main path field
+        "path": absolute_path_str, // Explicitly store the absolute path
+        "name": file_name,
+        "is_directory": metadata.is_dir(),
+    });
+
+    if metadata.is_dir() {
+      // Recursively call with the absolute path of the subdirectory
+      match build_notes_tree(&absolute_path_str) {
+        Ok(children) => {
+          if let Some(arr) = children.as_array() {
+            if !arr.is_empty() {
+              node["children"] = children;
+            }
+          }
+        }
+        Err(e) => eprintln!("Error building subtree for {}: {}", absolute_path_str, e), // Log error but continue if possible
+      }
+    }
+    entries.push(node);
+  }
+
+  // Optional: Sort entries alphabetically by name
+  entries.sort_by(|a, b| {
+    let name_a = a["name"].as_str().unwrap_or("");
+    let name_b = b["name"].as_str().unwrap_or("");
+    name_a.cmp(name_b)
+  });
+  Ok(json!(entries))
 }
 
 fn process_directory(
