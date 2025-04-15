@@ -151,7 +151,6 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
     // Get the current page content based on index (simplified using the robust `pages` memo)
     const getCurrentPageContent = useCallback((): FreenotePageContent => {
       if (pages && pages.length > currentPageIndex) {
-        // pages[currentPageIndex] is guaranteed by the useMemo to have lines as an array
         return pages[currentPageIndex];
       }
 
