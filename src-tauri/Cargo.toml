@@ -33,6 +33,7 @@ tokio = { version = "1.44.2", features = ["rt-multi-thread"] }
 notify = "8.0.0"
 ollama-rs = "0.3.0"
 thiserror = "2.0.12"
+mongodb = "3.2.3"
 
 
 [features]
