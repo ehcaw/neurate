@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod fs;
 mod qdrant;
 mod ollama;
+mod mongo;
 
 
 // Re-export the functions from the fs module

@@ -26,6 +26,7 @@ import {
   Minus,
   Plus,
   FilePlus,
+  Undo,
 } from "lucide-react";
 import { Input } from "../ui/input";
 import { invoke } from "@tauri-apps/api/core";
@@ -118,6 +119,10 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
   ({ note, width = 1000, height = 700, updateNote }, ref) => {
     // Track the current page index
     const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
+    // Add history state for undo functionality (per page)
+    const [pageHistory, setPageHistory] = useState<FreenotePageContent[]>([]);
+    const [historyIndex, setHistoryIndex] = useState<number>(-1);
+    const MAX_HISTORY_SIZE = 50; // Limit history size to prevent memory issues
     const { notes, setNotes, setNotesTree, setRecentNotes } = notesStore();
 
     // Get all pages from the note, ensuring lines are always a valid array
@@ -196,13 +201,21 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
       );
       console.log("initial lines ", initialLines);
 
-      return {
+      const initialPage = {
         id: initialPageData.id,
         lines: initialLines,
         content: initialPageData.content || "<p>Start typing here...</p>",
         created_at: initialPageData.created_at,
         last_modified: initialPageData.last_modified,
       };
+
+      // Initialize history with the initial state
+      setTimeout(() => {
+        setPageHistory([{ ...initialPage }]);
+        setHistoryIndex(0);
+      }, 0);
+
+      return initialPage;
     });
 
     const isQuillUpdating = useRef(false);
@@ -224,6 +237,11 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
     useEffect(() => {
       const currentPageData = getCurrentPageContent(); // Relies on the robust 'pages' memo
       setPageContent(currentPageData);
+
+      // Reset history when switching pages
+      setPageHistory([{ ...currentPageData }]);
+      setHistoryIndex(0);
+
       isQuillUpdating.current = true;
       // Use timeout to ensure Quill value prop updates before allowing onChange
       setTimeout(() => {
@@ -357,10 +375,39 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
       [saveCurrentPageToNote],
     );
 
+    const handleUndo = useCallback(() => {
+      // If there's history to go back to
+      if (historyIndex > 0) {
+        const previousState = pageHistory[historyIndex - 1];
+        setHistoryIndex(historyIndex - 1);
+        setPageContent(previousState);
+        debouncedSave(previousState);
+      }
+    }, [historyIndex, pageHistory, debouncedSave]);
+
     // Effect to add custom styles for Quill (no changes needed here)
     useEffect(() => {
       // ... style injection code ...
     }, []);
+
+    // Add keyboard event listener for undo functionality (Ctrl+Z or Cmd+Z)
+    useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+        // Handle Ctrl+Z or Cmd+Z (on Mac)
+        if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+          e.preventDefault(); // Prevent browser's default undo
+          handleUndo();
+        }
+      };
+
+      // Add listener to the window
+      window.addEventListener("keydown", handleKeyDown);
+
+      // Clean up on unmount
+      return () => {
+        window.removeEventListener("keydown", handleKeyDown);
+      };
+    }, [handleUndo]);
 
     // Update local title state when note prop changes (e.g., initial load or external update)
     useEffect(() => {
@@ -371,12 +418,44 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [note?.title]);
 
+    // Helper function to add state to history
+    const addToHistory = useCallback(
+      (state: FreenotePageContent) => {
+        // Only add to history if it's different from the current state
+        const lastHistoryState = pageHistory[historyIndex];
+        const isDifferent =
+          !lastHistoryState ||
+          JSON.stringify(lastHistoryState) !== JSON.stringify(state);
+
+        if (!isDifferent) return;
+
+        // If we're not at the end of history, truncate future states
+        const newHistory =
+          historyIndex < pageHistory.length - 1
+            ? pageHistory.slice(0, historyIndex + 1)
+            : pageHistory;
+
+        // Add the new state to history, limiting to MAX_HISTORY_SIZE
+        const updatedHistory = [...newHistory, { ...state }];
+        if (updatedHistory.length > MAX_HISTORY_SIZE) {
+          updatedHistory.shift(); // Remove oldest state
+        }
+
+        setPageHistory(updatedHistory);
+        setHistoryIndex(updatedHistory.length - 1);
+      },
+      [historyIndex, pageHistory],
+    );
+
     // Handle ReactQuill content changes
     const handleQuillChange = useCallback(
       (content: string) => {
         if (isQuillUpdating.current) return;
 
         console.log("QuillChange - content changed");
+
+        // First add current state to history
+        addToHistory(pageContent);
 
         // Update local state (ensure lines is preserved correctly)
         const updatedPageData = { ...pageContent, content };
@@ -385,7 +464,7 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
         // Save to backend (debounced)
         debouncedSave(updatedPageData); // Pass the latest state
       },
-      [pageContent, debouncedSave], // pageContent is needed to preserve other fields like lines
+      [pageContent, debouncedSave, addToHistory], // pageContent is needed to preserve other fields like lines
     );
 
     // Drawing handlers
@@ -394,6 +473,9 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
     ) => {
       // Only draw if a drawing tool is active
       if (tool !== "brush" && tool !== "eraser") return;
+
+      // Add current state to history before starting a new drawing action
+      addToHistory(pageContent);
 
       setIsDrawing(true);
       const pos = e.target.getStage()?.getPointerPosition();
@@ -466,6 +548,9 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
           "Are you sure you want to clear all drawings on this page?",
         )
       ) {
+        // Add current state to history before clearing
+        addToHistory(pageContent);
+
         const clearedPageData = {
           ...pageContent,
           lines: [], // Set lines to empty array
@@ -492,6 +577,7 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
     useImperativeHandle(ref, () => ({
       clearDrawing: handleClearDrawing,
       toggleSidebar: toggleSidebar,
+      undo: handleUndo,
       getContent: () => {
         // Return the current state, ensuring lines is an array
         return {
@@ -1078,13 +1164,24 @@ export const RichSketchpadImpl = forwardRef<any, StandaloneRichSketchpadProps>(
                 </div>
               </div>
 
-              {/* Spacer to push clear button down */}
+              {/* Spacer to push action buttons down */}
               <div className="flex-grow"></div>
+
+              {/* Undo Button */}
+              <button
+                onClick={handleUndo}
+                disabled={historyIndex <= 0}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 mb-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-md cursor-pointer transition-colors duration-200 ease-in-out hover:bg-blue-100 hover:border-blue-300 font-medium w-full flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-50 disabled:hover:border-blue-200"
+                title="Undo last action (Ctrl+Z)"
+              >
+                <Undo size={16} />
+                Undo Last Action
+              </button>
 
               {/* Clear Drawings Button */}
               <button
                 onClick={handleClearDrawing}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 mt-4 bg-red-50 text-red-700 border border-red-200 rounded-md cursor-pointer transition-colors duration-200 ease-in-out hover:bg-red-100 hover:border-red-300 font-medium w-full flex-shrink-0" // Tailwind + flex-shrink-0
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 text-red-700 border border-red-200 rounded-md cursor-pointer transition-colors duration-200 ease-in-out hover:bg-red-100 hover:border-red-300 font-medium w-full flex-shrink-0" // Tailwind + flex-shrink-0
               >
                 <Trash2 size={16} />
                 Clear Current Page Drawings

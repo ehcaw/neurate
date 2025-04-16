@@ -1,4 +1,3 @@
-"use client";
 import "@/components/styles.module.scss";
 
 import { useState } from "react";
@@ -8,7 +7,16 @@ import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
-import CodeBlock from "@tiptap/extension-code-block";
+import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
+import BulletList from "@tiptap/extension-bullet-list";
+import ListItem from "@tiptap/extension-list-item";
+import Paragraph from "@tiptap/extension-paragraph";
+import Blockquote from "@tiptap/extension-blockquote";
+import TaskList from "@tiptap/extension-task-list";
+import TaskItem from "@tiptap/extension-task-item";
+
+import { all, createLowlight } from "lowlight";
+
 import { useCallback, forwardRef, useEffect, useImperativeHandle } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,6 +49,8 @@ interface TiptapProps {
   updateNote: (id: string, updates: Partial<Note>) => void;
 }
 
+const lowlight = createLowlight(all);
+
 export const Tiptap = forwardRef<any, TiptapProps>(
   ({ note, updateNote }, ref) => {
     const [localTitle, setLocalTitle] = useState(note.title || "");
@@ -48,11 +58,29 @@ export const Tiptap = forwardRef<any, TiptapProps>(
 
     const editor = useEditor({
       extensions: [
-        StarterKit,
+        StarterKit.configure({
+          bulletList: false,
+          listItem: false,
+          orderedList: false,
+        }),
+        Paragraph,
+        ListItem.configure({
+          HTMLAttributes: {
+            class: "list-item",
+          },
+        }),
+        BulletList.configure({
+          HTMLAttributes: {
+            class: "bullet-list",
+          },
+        }),
+        Blockquote,
+        TaskList,
+        TaskItem,
         Image,
         Link.configure({ openOnClick: false }),
         Placeholder.configure({ placeholder: "Start writing..." }),
-        CodeBlock,
+        CodeBlockLowlight.configure({ lowlight }),
         SlashCommands,
         NodeWrapper({
           component: SketchPadImpl,
@@ -133,13 +161,6 @@ export const Tiptap = forwardRef<any, TiptapProps>(
         const file = (event.target as HTMLInputElement).files?.[0];
         if (!file) return;
 
-        // You'd implement actual image upload here
-        // For example:
-        // const formData = new FormData()
-        // formData.append('image', file)
-        // const response = await fetch('/api/upload', { method: 'POST', body: formData })
-        // const { url } = await response.json()
-
         // For now, using a placeholder:
         const url = URL.createObjectURL(file);
 
@@ -148,24 +169,6 @@ export const Tiptap = forwardRef<any, TiptapProps>(
 
       input.click();
     }, [editor]);
-
-    const insertSketchPad = () => {
-      if (editor) {
-        editor.commands.insertContent({
-          type: "sketchpad",
-          attrs: {
-            width: 300,
-            height: 200,
-            lines: [],
-          },
-        });
-      }
-    };
-
-    const updateTitle = (title: String) => {
-      console.log(note.id);
-      invoke("update_title", { path: note.id, newTitle: title });
-    };
 
     if (!editor) return null;
 

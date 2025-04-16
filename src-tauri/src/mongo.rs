@@ -1,28 +1,25 @@
 use mongodb::{
-  bson::doc,
   options::{ClientOptions, ServerApi, ServerApiVersion},
   Client,
 };
+use once_cell::sync::OnceCell;
+use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> mongodb::error::Result<()> {
-  // Replace the placeholder with your Atlas connection string
-  let uri = "<connection string>";
+static MONGO_CLIENT: OnceCell<Arc<Client>> = OnceCell::new();
+async fn get_client() -> mongodb::error::Result<&'static Arc<Client>> {
+  if let Some(client) = MONGO_CLIENT.get() {
+    return Ok(client);
+  }
+
+  let uri = "uri here";
   let mut client_options = ClientOptions::parse(uri).await?;
-
-  // Set the server_api field of the client_options object to Stable API version 1
   let server_api = ServerApi::builder().version(ServerApiVersion::V1).build();
   client_options.server_api = Some(server_api);
-
-  // Create a new client and connect to the server
   let client = Client::with_options(client_options)?;
 
-  // Send a ping to confirm a successful connection
-  client
-    .database("admin")
-    .run_command(doc! { "ping": 1 })
-    .await?;
-  println!("Pinged your deployment. You successfully connected to MongoDB!");
-
-  Ok(())
+  // Initialize it only once
+  match MONGO_CLIENT.set(Arc::new(client)) {
+    Ok(_) => Ok(MONGO_CLIENT.get().unwrap()),
+    Err(_) => Ok(MONGO_CLIENT.get().unwrap()), // Someone else initialized it first
+  }
 }
