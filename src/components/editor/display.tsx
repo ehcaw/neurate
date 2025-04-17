@@ -1,4 +1,4 @@
-import { Tiptap } from "./notebook";
+import dynamic from "next/dynamic";
 import { RichSketchpadImpl } from "../custom-free-note/rich-sketchpad";
 import {
   useState,
@@ -9,6 +9,12 @@ import {
 } from "react";
 import { Note } from "@/lib/types";
 import { RichSketchpadData } from "@/lib/types";
+
+const Tiptap = dynamic(
+  () => import("./notebookssr").then((mod) => mod.Tiptap),
+  { ssr: false },
+);
+
 interface NoteDisplayProps {
   note: Note;
   type: "notebook" | "freenote";
